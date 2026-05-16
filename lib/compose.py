@@ -9,6 +9,7 @@ Pipeline:
 from __future__ import annotations
 
 import json
+import math
 import re
 import sys
 from dataclasses import dataclass
@@ -28,6 +29,20 @@ _DEFAULT_VCODEC = "libx264"
 _DEFAULT_ACODEC = "aac"
 _DEFAULT_SR = 48000
 _DEFAULT_AC = 2
+
+# zoompan motion -- allowed values for the optional `motion` slide field.
+# Anchor names mirror common compositing tools (After Effects, OBS).
+# Pan direction follows cinematography convention: "pan left" = the camera
+# (visible window) moves toward the left edge of the image, so content
+# appears to move right. Documented in the slide schema.
+_VALID_MOTION_TYPES = {"zoom_in", "zoom_out", "pan"}
+_VALID_ANCHORS = {"center", "top_left", "top_right", "bottom_left", "bottom_right"}
+_VALID_PAN_DIRECTIONS = {"left", "right", "up", "down"}
+# zoompan's `zoom` expression is internally clamped to [1, 10]; values outside
+# this range silently saturate. Reject up front so the agent gets a clear
+# error instead of mystery output.
+_MIN_ZOOM = 1.0
+_MAX_ZOOM = 10.0
 
 _FONT_CANDIDATES = [
     "C:/Windows/Fonts/segoeui.ttf",
@@ -139,6 +154,119 @@ def _scale_pad(rp: RenderParams) -> str:
         f"scale={rp.width}:{rp.height}:force_original_aspect_ratio=decrease,"
         f"pad={rp.width}:{rp.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
         f"setsar=1,fps={rp.fps},format=yuv420p"
+    )
+
+
+def _validate_zoom(value: float, field: str) -> float:
+    """Reject zoom factors outside zoompan's documented [1, 10] range."""
+    if not math.isfinite(value):
+        raise SystemExit(f"slide motion: `{field}` must be finite, got {value!r}")
+    if value < _MIN_ZOOM or value > _MAX_ZOOM:
+        raise SystemExit(
+            f"slide motion: `{field}` must be between {_MIN_ZOOM} and "
+            f"{_MAX_ZOOM} (zoompan's documented range), got {value!r}"
+        )
+    return value
+
+
+def _motion_anchor_xy(anchor: str) -> tuple[str, str]:
+    """Return (x_expr, y_expr) for a static zoom anchor.
+
+    Coordinates are in zoompan's input-image space: `iw`/`ih` are the input
+    dimensions and `zoom` is the *current* zoom factor. The selectable range
+    along each axis is `0..iw-iw/zoom`, collapsing to 0 when zoom==1.
+    """
+    if anchor == "center":
+        return "(iw-iw/zoom)/2", "(ih-ih/zoom)/2"
+    if anchor == "top_left":
+        return "0", "0"
+    if anchor == "top_right":
+        return "iw-iw/zoom", "0"
+    if anchor == "bottom_left":
+        return "0", "ih-ih/zoom"
+    if anchor == "bottom_right":
+        return "iw-iw/zoom", "ih-ih/zoom"
+    raise SystemExit(
+        f"slide motion: unknown anchor {anchor!r}. "
+        f"Valid: {sorted(_VALID_ANCHORS)}"
+    )
+
+
+def _build_motion_filter(motion: dict, total: float, rp: RenderParams) -> str:
+    """Emit a single `zoompan=...` filter string for a slide `motion` block.
+
+    zoompan semantics that drove the math here:
+
+    * zoompan consumes one source frame and emits `d` output frames. With a
+      looped still input (`-loop 1`) the source can supply arbitrarily many
+      frames, so if `d` is smaller than the trim window zoompan will start a
+      *second* animation cycle -- producing a visible snap-back. Setting
+      `d = ceil(total*fps) + 1` plus clamping progress with `min(on,denom)`
+      guarantees the animation finishes inside the trim window AND never
+      spills into a second source frame.
+
+    * `on` is zoompan's global output frame counter (not per-source-frame),
+      so `on/denom` is a valid 0..1 progress.
+
+    * Setting `s=WxH:fps=FPS` is required: zoompan's default fps is 25
+      (not the project fps) and its default size is the input size.
+
+    * Expressions go inside single quotes; ffmpeg's filtergraph parser owns
+      the quoting, no shell escaping needed.
+    """
+    if not isinstance(motion, dict):
+        raise SystemExit(f"slide motion: must be an object, got {type(motion).__name__}")
+    mtype = motion.get("type")
+    if mtype not in _VALID_MOTION_TYPES:
+        raise SystemExit(
+            f"slide motion: unknown type {mtype!r}. "
+            f"Valid: {sorted(_VALID_MOTION_TYPES)}"
+        )
+    if total <= 0 or not math.isfinite(total):
+        raise SystemExit(f"slide motion: slide duration must be > 0, got {total!r}")
+    if rp.fps <= 0:
+        raise SystemExit(f"slide motion: project fps must be > 0, got {rp.fps!r}")
+
+    visible_frames = max(1, math.ceil(total * rp.fps))
+    d = visible_frames + 1
+    denom = max(visible_frames - 1, 1)
+    progress = f"min(on,{denom})/{denom}"
+    reverse = f"(1-min(on,{denom})/{denom})"
+
+    if mtype in ("zoom_in", "zoom_out"):
+        default_from, default_to = (1.0, 1.15) if mtype == "zoom_in" else (1.15, 1.0)
+        try:
+            zfrom = _validate_zoom(float(motion.get("from", default_from)), "from")
+            zto = _validate_zoom(float(motion.get("to", default_to)), "to")
+        except (TypeError, ValueError) as exc:
+            raise SystemExit(f"slide motion: `from`/`to` must be numbers: {exc}")
+        anchor = motion.get("anchor", "center")
+        x_expr, y_expr = _motion_anchor_xy(anchor)
+        z_expr = f"{zfrom}+({zto}-{zfrom})*{progress}"
+    else:
+        direction = motion.get("direction")
+        if direction not in _VALID_PAN_DIRECTIONS:
+            raise SystemExit(
+                f"slide motion: pan requires `direction` in "
+                f"{sorted(_VALID_PAN_DIRECTIONS)}; got {direction!r}"
+            )
+        try:
+            zoom_const = _validate_zoom(float(motion.get("zoom", 1.15)), "zoom")
+        except (TypeError, ValueError) as exc:
+            raise SystemExit(f"slide motion: `zoom` must be a number: {exc}")
+        z_expr = f"{zoom_const}"
+        if direction == "left":
+            x_expr, y_expr = f"(iw-iw/zoom)*{reverse}", "(ih-ih/zoom)/2"
+        elif direction == "right":
+            x_expr, y_expr = f"(iw-iw/zoom)*{progress}", "(ih-ih/zoom)/2"
+        elif direction == "up":
+            x_expr, y_expr = "(iw-iw/zoom)/2", f"(ih-ih/zoom)*{reverse}"
+        else:
+            x_expr, y_expr = "(iw-iw/zoom)/2", f"(ih-ih/zoom)*{progress}"
+
+    return (
+        f"zoompan=z='{z_expr}':x='{x_expr}':y='{y_expr}':"
+        f"d={d}:s={rp.width}x{rp.height}:fps={rp.fps}"
     )
 
 
@@ -445,6 +573,16 @@ def _render_slide(
         ]
         # color source is already correct size/fps; still ensure pixel format.
         vf_chain.append(f"format=yuv420p,setsar=1,fps={rp.fps}")
+
+    motion = item.get("motion")
+    if motion is not None:
+        if not bg_image:
+            raise SystemExit(
+                "slide motion requires `background_image`; motion on a solid "
+                "`background_color` is a visual no-op. "
+                f"Item: {json.dumps(item, ensure_ascii=False)}"
+            )
+        vf_chain.append(_build_motion_filter(motion, total, rp))
 
     text_filters = _build_drawtext_filters(item, rp, tmp_dir, idx, font)
     if text_filters:

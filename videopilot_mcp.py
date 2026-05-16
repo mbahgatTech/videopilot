@@ -889,6 +889,43 @@ def schema() -> dict:
                             "pad_after_sec": {"type": "number"},
                             "background_color": {"type": "string", "example": "#0b132b"},
                             "background_image": {"type": "string"},
+                            "motion": {
+                                "type": "object",
+                                "description": (
+                                    "Optional Ken-Burns motion applied to "
+                                    "`background_image`. No-op on solid "
+                                    "background_color (raises an error if set). "
+                                    "Pan direction follows cinematography "
+                                    "convention: 'left' = camera moves left, "
+                                    "content appears to move right."
+                                ),
+                                "properties": {
+                                    "type": {"enum": ["zoom_in", "zoom_out", "pan"]},
+                                    "from": {
+                                        "type": "number",
+                                        "description": "zoom_in/zoom_out start zoom; default 1.0 (zoom_in) or 1.15 (zoom_out)",
+                                    },
+                                    "to": {
+                                        "type": "number",
+                                        "description": "zoom_in/zoom_out end zoom; default 1.15 (zoom_in) or 1.0 (zoom_out)",
+                                    },
+                                    "anchor": {
+                                        "enum": [
+                                            "center", "top_left", "top_right",
+                                            "bottom_left", "bottom_right",
+                                        ],
+                                        "description": "zoom_in/zoom_out only; default 'center'",
+                                    },
+                                    "direction": {
+                                        "enum": ["left", "right", "up", "down"],
+                                        "description": "pan only; required",
+                                    },
+                                    "zoom": {
+                                        "type": "number",
+                                        "description": "pan only; constant zoom factor (default 1.15)",
+                                    },
+                                },
+                            },
                             "title": {"type": "string"},
                             "subtitle": {"type": "string"},
                             "body": {
@@ -1058,6 +1095,7 @@ def add_slide(
     body: Optional[list[str]] = None,
     duration_sec: Optional[float] = None,
     pad_after_sec: Optional[float] = None,
+    motion: Optional[dict] = None,
     position: Optional[int] = None,
     project_root: Optional[str] = None,
 ) -> dict:
@@ -1067,6 +1105,10 @@ def add_slide(
     ``duration_sec`` -- otherwise compose has no way to decide how long the
     slide should live on screen. ``body`` is the new compose-plan field for
     bullets/body lines rendered below the subtitle.
+
+    ``motion`` is an optional Ken-Burns animation applied to
+    ``background_image``. Shape: ``{"type": "zoom_in"|"zoom_out"|"pan", ...}``
+    -- see ``schema()`` for the full sub-schema. Requires ``background_image``.
 
     If compose-plan.json is missing, it is created with a default 1920x1080
     @30fps libx264/aac output block.
@@ -1104,6 +1146,10 @@ def add_slide(
         item["duration_sec"] = float(duration_sec)
     if pad_after_sec is not None:
         item["pad_after_sec"] = float(pad_after_sec)
+    if motion is not None:
+        if not isinstance(motion, dict):
+            return {"error": "`motion` must be an object (dict)."}
+        item["motion"] = dict(motion)
 
     if position is None or position >= len(timeline):
         timeline.append(item)
