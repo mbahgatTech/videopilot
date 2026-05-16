@@ -5,6 +5,9 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Callable
+
+ProgressCb = Callable[[int, int, str], None]
 
 
 def _load_json(path: Path) -> dict:
@@ -32,6 +35,7 @@ def run(
     *,
     model: str = "base",
     language: str | None = None,
+    progress: ProgressCb | None = None,
 ) -> int:
     try:
         from faster_whisper import WhisperModel
@@ -58,6 +62,8 @@ def run(
 
     print(f"Loading faster-whisper model: {model} (first run downloads weights)")
     wm = WhisperModel(model, device="cpu", compute_type="int8")
+    if progress is not None:
+        progress(0, 1, "model loaded")
     print(f"Transcribing: {src_path}")
     seg_iter, info = wm.transcribe(
         str(src_path),
@@ -97,6 +103,8 @@ def run(
 
         if (i % 20) == 0:
             print(f"  ... {i} segments")
+        if progress is not None and (i % 10) == 0:
+            progress(i, 0, f"transcribed {i} segments")
 
     _write_json(
         json_out,

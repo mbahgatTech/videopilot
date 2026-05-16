@@ -11,8 +11,11 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Callable
 
 from . import ffmpeg_wrap
+
+ProgressCb = Callable[[int, int, str], None]
 
 
 def _load_json(path: Path) -> dict:
@@ -23,7 +26,14 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
-def run(root: Path, slug: str, *, only: list[str] | None = None, force: bool = False) -> int:
+def run(
+    root: Path,
+    slug: str,
+    *,
+    only: list[str] | None = None,
+    force: bool = False,
+    progress: ProgressCb | None = None,
+) -> int:
     proj = root / slug
     script_path = proj / "script.json"
     if not script_path.exists():
@@ -47,9 +57,15 @@ def run(root: Path, slug: str, *, only: list[str] | None = None, force: bool = F
     todo = [s for s in segments if (not only_set or s["id"] in only_set)]
     print(f"Synthesizing {len(todo)} segment(s) (engine default: {defaults.get('engine','edge-tts')})")
 
+    total = len(todo)
+    if progress is not None and total > 0:
+        progress(0, total, "starting tts")
+
     new_entries: dict[str, dict] = {}
-    for seg in todo:
+    for i, seg in enumerate(todo, start=1):
         seg_id = seg["id"]
+        if progress is not None:
+            progress(i, total, f"synth {seg_id}")
         out_path = voice_dir / f"{seg_id}.mp3"
         if out_path.exists() and not force:
             print(f"  [skip] {seg_id} (exists; pass --force to regenerate)")
