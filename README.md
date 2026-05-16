@@ -37,6 +37,7 @@ source.mp4  ->  script.json  ->  tts  ->  cut-plan.json  ->  cut  ->  compose-pl
 | Hand-off to Premiere / Resolve / Final Cut | EDL (CMX 3600) + FCPXML export |
 | Replayable render scripts | PowerShell / bash export |
 | Agent-first design | JSON state-file contract documented in `AGENT.md` |
+| Incremental authoring from agents | Six convenience MCP tools for incremental authoring, schema introspection, preview rendering, and idempotency probing — see `AGENT.md` |
 
 ## Install
 

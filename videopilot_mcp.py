@@ -14,8 +14,11 @@ Tools mirror the CLI subcommands. Long-running tools (`tts`, `transcribe`,
 `compose`, `cut`, `silence`) run on a worker thread so they neither block the
 FastMCP request loop nor crash on nested `asyncio.run()` calls inside lib
 modules, and they stream `Context.report_progress` heartbeats so MCP clients
-don't time out (-32001). Helper tools (`read_state`, `write_state`) let the
-agent author the per-project JSON state files.
+don't time out (-32001). Helper tools (`read_state`, `write_state`,
+`add_vo_segment`, `add_slide`, `set_compose_output`) let the agent author the
+per-project JSON state files. `schema()`, `preview_slide()`, and
+`is_up_to_date()` round out the surface for discovery, fast feedback, and
+idempotency probing.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ import os
 import sys
 import threading
 from contextlib import redirect_stderr, redirect_stdout
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -67,6 +71,28 @@ _STATE_FILES = {
 
 _WRITABLE_STATE = {"script", "cut-plan", "compose-plan"}
 
+_DEFAULT_VOICE_DEFAULTS: dict[str, str] = {
+    "engine": "edge-tts",
+    "voice": "en-US-AndrewMultilingualNeural",
+    "rate": "+0%",
+    "pitch": "+0Hz",
+}
+
+_DEFAULT_COMPOSE_OUTPUT: dict[str, Any] = {
+    "filename": "final.mp4",
+    "resolution": "1920x1080",
+    "fps": 30,
+    "video_bitrate": "8M",
+    "audio_bitrate": "192k",
+    "video_codec": "libx264",
+    "audio_codec": "aac",
+}
+
+
+# ---------------------------------------------------------------------------
+# Path / IO helpers
+# ---------------------------------------------------------------------------
+
 
 def _projects_root(override: Optional[str]) -> Path:
     """Resolve the projects/ directory.
@@ -92,6 +118,27 @@ def _read_json(path: Path) -> Any:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as e:
         return {"__parse_error__": str(e)}
+
+
+def _write_json(path: Path, data: Any) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _iso(ts: float) -> str:
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _mtime(path: Path) -> Optional[float]:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Sync + threaded execution helpers
+# ---------------------------------------------------------------------------
 
 
 def _capture(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> tuple[int, str]:
@@ -175,6 +222,11 @@ async def _run_threaded(
             raise exc
 
 
+# ---------------------------------------------------------------------------
+# Status snapshot
+# ---------------------------------------------------------------------------
+
+
 def _status(slug: str, project_root: Optional[str]) -> dict:
     root = _projects_root(project_root)
     proj = _project_dir(root, slug)
@@ -198,6 +250,11 @@ def _status(slug: str, project_root: Optional[str]) -> dict:
 
 
 mcp = FastMCP("videopilot")
+
+
+# ---------------------------------------------------------------------------
+# Short / sync tools (kept on the request thread; no progress streaming)
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool()
@@ -567,6 +624,654 @@ def export(
         ),
     }
     return {"exit_code": rc, "log": log, "exports": exports}
+
+
+# ---------------------------------------------------------------------------
+# Schema discovery
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def schema() -> dict:
+    """Return JSON schemas (hand-rolled, agent-facing) for every state file
+    the engine reads or writes. Use this to validate / generate state without
+    spelunking the codebase. Includes the new compose-plan ``slide.body``
+    field (list of strings rendered below the subtitle).
+    """
+    schemas: dict[str, dict] = {
+        "project": {
+            "description": "Engine-managed project manifest. DO NOT edit by hand.",
+            "required": ["name", "slug", "created_at", "sources"],
+            "properties": {
+                "name": {"type": "string"},
+                "slug": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"},
+                "created_at": {"type": "string", "format": "date-time"},
+                "sources": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["id", "path"],
+                        "properties": {
+                            "id": {"type": "string", "example": "raw1"},
+                            "path": {
+                                "type": "string",
+                                "description": "Relative to the project dir.",
+                            },
+                            "duration_sec": {"type": "number"},
+                            "width": {"type": "integer"},
+                            "height": {"type": "integer"},
+                            "fps": {"type": "number"},
+                        },
+                    },
+                },
+            },
+        },
+        "script": {
+            "description": "Voiceover script. Each segment becomes voice/<id>.mp3.",
+            "required": ["segments"],
+            "properties": {
+                "voice_defaults": {
+                    "type": "object",
+                    "properties": {
+                        "engine": {"enum": ["edge-tts", "azure"]},
+                        "voice": {"type": "string"},
+                        "rate": {"type": "string", "example": "+0%"},
+                        "pitch": {"type": "string", "example": "+0Hz"},
+                    },
+                },
+                "segments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["id", "text"],
+                        "properties": {
+                            "id": {"type": "string", "example": "vo-intro"},
+                            "text": {"type": "string"},
+                            "voice": {"type": "string"},
+                            "rate": {"type": "string"},
+                            "pitch": {"type": "string"},
+                            "engine": {"enum": ["edge-tts", "azure"]},
+                            "pause_after_ms": {"type": "integer"},
+                        },
+                    },
+                },
+            },
+        },
+        "cut-plan": {
+            "description": "Clip selection. Each clip becomes clips/<id>.mp4.",
+            "required": ["clips"],
+            "properties": {
+                "clips": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["id", "source", "start", "end"],
+                        "properties": {
+                            "id": {"type": "string"},
+                            "source": {
+                                "type": "string",
+                                "description": "References project.json::sources[].id",
+                            },
+                            "start": {"type": "number", "description": "seconds"},
+                            "end": {"type": "number", "description": "seconds"},
+                            "label": {"type": "string"},
+                        },
+                    },
+                }
+            },
+        },
+        "compose-plan": {
+            "description": "Final-render timeline.",
+            "required": ["timeline"],
+            "properties": {
+                "output": {
+                    "type": "object",
+                    "properties": {
+                        "filename": {"type": "string", "default": "final.mp4"},
+                        "resolution": {"type": "string", "default": "1920x1080"},
+                        "fps": {"type": "integer", "default": 30},
+                        "video_bitrate": {"type": "string", "default": "8M"},
+                        "audio_bitrate": {"type": "string", "default": "192k"},
+                        "video_codec": {"type": "string", "default": "libx264"},
+                        "audio_codec": {"type": "string", "default": "aac"},
+                    },
+                },
+                "background_music": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "volume_db": {"type": "number"},
+                    },
+                },
+                "timeline": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["type"],
+                        "properties": {
+                            "type": {"enum": ["slide", "clip"]},
+                            "voiceover": {
+                                "type": "string",
+                                "description": "References script.json::segments[].id",
+                            },
+                            "clip": {
+                                "type": "string",
+                                "description": "References cut-plan.json::clips[].id",
+                            },
+                            "duration_sec": {"type": "number"},
+                            "pad_after_sec": {"type": "number"},
+                            "background_color": {"type": "string", "example": "#0b132b"},
+                            "background_image": {"type": "string"},
+                            "title": {"type": "string"},
+                            "subtitle": {"type": "string"},
+                            "body": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": (
+                                    "Bullets / body lines rendered below the "
+                                    "subtitle. Each list entry is one line."
+                                ),
+                            },
+                        },
+                    },
+                },
+            },
+            "constraints": [
+                "Every slide item must have either `voiceover` OR `duration_sec`.",
+                "Every clip item must have a `clip` id that exists in cut-plan.json.",
+            ],
+        },
+        "voice-manifest": {
+            "description": "Engine-managed. Written by tts. Read by compose.",
+            "required": ["segments"],
+            "properties": {
+                "segments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["id", "path"],
+                        "properties": {
+                            "id": {"type": "string"},
+                            "path": {"type": "string", "example": "voice/vo-intro.mp3"},
+                            "duration_sec": {"type": "number"},
+                            "engine": {"type": "string"},
+                            "voice": {"type": "string"},
+                        },
+                    },
+                }
+            },
+        },
+        "clips-manifest": {
+            "description": "Engine-managed. Written by cut. Read by compose.",
+            "required": ["clips"],
+            "properties": {
+                "clips": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "required": ["id", "path"],
+                        "properties": {
+                            "id": {"type": "string"},
+                            "path": {"type": "string", "example": "clips/c1.mp4"},
+                            "duration_sec": {"type": "number"},
+                            "start": {"type": "number"},
+                            "end": {"type": "number"},
+                            "source": {"type": "string"},
+                        },
+                    },
+                }
+            },
+        },
+    }
+    notes = (
+        "Author script.json + cut-plan.json + compose-plan.json. "
+        "tts reads script.json -> writes voice/manifest.json. "
+        "cut reads cut-plan.json + project.json::sources -> writes clips/manifest.json. "
+        "compose reads compose-plan.json + voice/manifest.json + clips/manifest.json -> writes out/<filename>. "
+        "Slide items reference voiceover segments by id; clip items reference cut-plan clips by id. "
+        "Use is_up_to_date(scope=...) to detect when an upstream edit has invalidated a downstream artifact."
+    )
+    return {"schemas": schemas, "notes": notes}
+
+
+# ---------------------------------------------------------------------------
+# State builder helpers
+# ---------------------------------------------------------------------------
+
+
+def _ensure_script(proj: Path) -> dict:
+    """Return existing script.json content or seed a sensible default."""
+    path = proj / "script.json"
+    if path.exists():
+        existing = _read_json(path)
+        if isinstance(existing, dict):
+            return existing
+    return {"voice_defaults": dict(_DEFAULT_VOICE_DEFAULTS), "segments": []}
+
+
+def _ensure_compose_plan(proj: Path) -> dict:
+    """Return existing compose-plan.json content or seed a sensible default."""
+    path = proj / "compose-plan.json"
+    if path.exists():
+        existing = _read_json(path)
+        if isinstance(existing, dict):
+            return existing
+    return {"output": dict(_DEFAULT_COMPOSE_OUTPUT), "timeline": []}
+
+
+@mcp.tool()
+def add_vo_segment(
+    slug: str,
+    id: str,
+    text: str,
+    voice: Optional[str] = None,
+    rate: Optional[str] = None,
+    pitch: Optional[str] = None,
+    engine: Optional[str] = None,
+    pause_after_ms: Optional[int] = None,
+    position: Optional[int] = None,
+    project_root: Optional[str] = None,
+) -> dict:
+    """Append (or insert at ``position``) a voiceover segment in script.json.
+
+    If ``id`` collides with an existing segment, returns an error WITHOUT
+    overwriting. If script.json is missing, it is created with sensible
+    ``voice_defaults`` (engine: edge-tts, voice: en-US-AndrewMultilingualNeural).
+    """
+    root = _projects_root(project_root)
+    proj = _project_dir(root, slug)
+    if not proj.exists():
+        return {"error": f"Project not found: {proj}. Call init first."}
+
+    script = _ensure_script(proj)
+    segments = list(script.get("segments") or [])
+
+    if any(isinstance(s, dict) and s.get("id") == id for s in segments):
+        return {
+            "error": (
+                f"Segment id '{id}' already exists in script.json. "
+                "Pick a different id or edit the existing segment via write_state."
+            )
+        }
+
+    seg: dict[str, Any] = {"id": id, "text": text}
+    if voice is not None:
+        seg["voice"] = voice
+    if rate is not None:
+        seg["rate"] = rate
+    if pitch is not None:
+        seg["pitch"] = pitch
+    if engine is not None:
+        seg["engine"] = engine
+    if pause_after_ms is not None:
+        seg["pause_after_ms"] = int(pause_after_ms)
+
+    if position is None or position >= len(segments):
+        segments.append(seg)
+    else:
+        segments.insert(max(0, int(position)), seg)
+
+    script["segments"] = segments
+    _write_json(proj / "script.json", script)
+    return {
+        "written": True,
+        "path": str(proj / "script.json"),
+        "segments": segments,
+    }
+
+
+@mcp.tool()
+def add_slide(
+    slug: str,
+    voiceover: Optional[str] = None,
+    background_color: Optional[str] = None,
+    background_image: Optional[str] = None,
+    title: Optional[str] = None,
+    subtitle: Optional[str] = None,
+    body: Optional[list[str]] = None,
+    duration_sec: Optional[float] = None,
+    pad_after_sec: Optional[float] = None,
+    position: Optional[int] = None,
+    project_root: Optional[str] = None,
+) -> dict:
+    """Append (or insert at ``position``) a ``slide`` item in compose-plan.json.
+
+    A slide must carry either ``voiceover`` (id from script.json) OR
+    ``duration_sec`` -- otherwise compose has no way to decide how long the
+    slide should live on screen. ``body`` is the new compose-plan field for
+    bullets/body lines rendered below the subtitle.
+
+    If compose-plan.json is missing, it is created with a default 1920x1080
+    @30fps libx264/aac output block.
+    """
+    if not voiceover and duration_sec is None:
+        return {
+            "error": (
+                "Slide needs either `voiceover` (script segment id) or "
+                "`duration_sec`. Both omitted; refusing to add an unresolvable slide."
+            )
+        }
+
+    root = _projects_root(project_root)
+    proj = _project_dir(root, slug)
+    if not proj.exists():
+        return {"error": f"Project not found: {proj}. Call init first."}
+
+    plan = _ensure_compose_plan(proj)
+    timeline = list(plan.get("timeline") or [])
+
+    item: dict[str, Any] = {"type": "slide"}
+    if voiceover is not None:
+        item["voiceover"] = voiceover
+    if background_color is not None:
+        item["background_color"] = background_color
+    if background_image is not None:
+        item["background_image"] = background_image
+    if title is not None:
+        item["title"] = title
+    if subtitle is not None:
+        item["subtitle"] = subtitle
+    if body is not None:
+        item["body"] = list(body)
+    if duration_sec is not None:
+        item["duration_sec"] = float(duration_sec)
+    if pad_after_sec is not None:
+        item["pad_after_sec"] = float(pad_after_sec)
+
+    if position is None or position >= len(timeline):
+        timeline.append(item)
+    else:
+        timeline.insert(max(0, int(position)), item)
+
+    plan["timeline"] = timeline
+    _write_json(proj / "compose-plan.json", plan)
+    return {
+        "written": True,
+        "path": str(proj / "compose-plan.json"),
+        "timeline": timeline,
+    }
+
+
+@mcp.tool()
+def set_compose_output(
+    slug: str,
+    filename: Optional[str] = None,
+    resolution: Optional[str] = None,
+    fps: Optional[int] = None,
+    video_bitrate: Optional[str] = None,
+    audio_bitrate: Optional[str] = None,
+    video_codec: Optional[str] = None,
+    audio_codec: Optional[str] = None,
+    project_root: Optional[str] = None,
+) -> dict:
+    """Patch compose-plan.json::output, leaving unspecified keys intact.
+
+    Pass only the keys you want to change. Returns the new output block.
+    """
+    root = _projects_root(project_root)
+    proj = _project_dir(root, slug)
+    if not proj.exists():
+        return {"error": f"Project not found: {proj}. Call init first."}
+
+    plan = _ensure_compose_plan(proj)
+    output = dict(plan.get("output") or {})
+
+    updates: dict[str, Any] = {
+        "filename": filename,
+        "resolution": resolution,
+        "fps": fps,
+        "video_bitrate": video_bitrate,
+        "audio_bitrate": audio_bitrate,
+        "video_codec": video_codec,
+        "audio_codec": audio_codec,
+    }
+    for k, v in updates.items():
+        if v is not None:
+            output[k] = v
+
+    plan["output"] = output
+    _write_json(proj / "compose-plan.json", plan)
+    return {
+        "written": True,
+        "path": str(proj / "compose-plan.json"),
+        "output": output,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Preview render
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def preview_slide(
+    slug: str,
+    index: int,
+    project_root: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> dict:
+    """Render ONE timeline item to ``out/preview-NNN.mp4`` for fast feedback.
+
+    Calls compose with ``only_index=index``, bypassing the full timeline
+    concatenation. Returns the preview path. Validates that
+    compose-plan.json exists and that ``index`` is in range first.
+    """
+    root = _projects_root(project_root)
+    proj = _project_dir(root, slug)
+    plan_path = proj / "compose-plan.json"
+    if not plan_path.exists():
+        return {"error": f"compose-plan.json missing in {proj}. Author it first."}
+
+    plan = _read_json(plan_path)
+    timeline = (plan or {}).get("timeline") or []
+    if not timeline:
+        return {"error": "compose-plan.json::timeline is empty; nothing to preview."}
+    if not isinstance(index, int) or index < 0 or index >= len(timeline):
+        return {
+            "error": (
+                f"index {index} out of range; timeline has {len(timeline)} item(s) "
+                f"(valid indices: 0..{len(timeline) - 1})."
+            )
+        }
+
+    rc, log = await _run_threaded(
+        compose_mod.run,
+        root,
+        slug,
+        only_index=index,
+        ctx=ctx,
+    )
+    preview = proj / "out" / f"preview-{index:03d}.mp4"
+    return {
+        "exit_code": rc,
+        "log": log,
+        "preview_path": str(preview) if preview.exists() else None,
+        "index": index,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Idempotency probe
+# ---------------------------------------------------------------------------
+
+_SCOPES = ("tts", "cut", "compose", "transcribe")
+
+
+def _check_tts(proj: Path) -> dict:
+    script_path = proj / "script.json"
+    if not script_path.exists():
+        return {
+            "up_to_date": False,
+            "reasons": ["script.json missing -- nothing to synthesize."],
+        }
+    script = _read_json(script_path) or {}
+    segments = script.get("segments") or []
+    if not segments:
+        return {"up_to_date": True, "reasons": []}
+
+    script_mtime = _mtime(script_path) or 0.0
+    reasons: list[str] = []
+    for seg in segments:
+        if not isinstance(seg, dict) or "id" not in seg:
+            continue
+        sid = seg["id"]
+        mp3 = proj / "voice" / f"{sid}.mp3"
+        mp3_mtime = _mtime(mp3)
+        if mp3_mtime is None:
+            reasons.append(f"voice/{sid}.mp3 missing")
+            continue
+        if mp3_mtime < script_mtime:
+            reasons.append(
+                f"script.json (modified {_iso(script_mtime)}) is newer than "
+                f"voice/{sid}.mp3 ({_iso(mp3_mtime)})"
+            )
+    return {"up_to_date": not reasons, "reasons": reasons}
+
+
+def _check_cut(proj: Path) -> dict:
+    cut_path = proj / "cut-plan.json"
+    project_path = proj / "project.json"
+    if not cut_path.exists():
+        return {"up_to_date": False, "reasons": ["cut-plan.json missing."]}
+    plan = _read_json(cut_path) or {}
+    clips = plan.get("clips") or []
+    if not clips:
+        return {"up_to_date": True, "reasons": []}
+
+    cut_mtime = _mtime(cut_path) or 0.0
+    project = _read_json(project_path) or {}
+    sources = {s["id"]: s for s in project.get("sources", []) if isinstance(s, dict)}
+
+    reasons: list[str] = []
+    for clip in clips:
+        if not isinstance(clip, dict) or "id" not in clip:
+            continue
+        cid = clip["id"]
+        out = proj / "clips" / f"{cid}.mp4"
+        out_mtime = _mtime(out)
+        if out_mtime is None:
+            reasons.append(f"clips/{cid}.mp4 missing")
+            continue
+        if out_mtime < cut_mtime:
+            reasons.append(
+                f"cut-plan.json (modified {_iso(cut_mtime)}) is newer than "
+                f"clips/{cid}.mp4 ({_iso(out_mtime)})"
+            )
+        src_id = clip.get("source")
+        src_entry = sources.get(src_id) if src_id else None
+        if src_entry and "path" in src_entry:
+            src_path = proj / src_entry["path"]
+            src_mtime = _mtime(src_path)
+            if src_mtime is not None and out_mtime < src_mtime:
+                reasons.append(
+                    f"source {src_id} ({_iso(src_mtime)}) is newer than "
+                    f"clips/{cid}.mp4 ({_iso(out_mtime)})"
+                )
+    return {"up_to_date": not reasons, "reasons": reasons}
+
+
+def _check_compose(proj: Path) -> dict:
+    plan_path = proj / "compose-plan.json"
+    if not plan_path.exists():
+        return {"up_to_date": False, "reasons": ["compose-plan.json missing."]}
+    plan = _read_json(plan_path) or {}
+    out_name = ((plan.get("output") or {}).get("filename")) or "final.mp4"
+    final = proj / "out" / out_name
+    final_mtime = _mtime(final)
+    if final_mtime is None:
+        return {"up_to_date": False, "reasons": [f"out/{out_name} missing"]}
+
+    reasons: list[str] = []
+    candidate_inputs: list[Path] = [
+        plan_path,
+        proj / "voice" / "manifest.json",
+        proj / "clips" / "manifest.json",
+    ]
+    for item in plan.get("timeline") or []:
+        if not isinstance(item, dict):
+            continue
+        bg = item.get("background_image")
+        if bg:
+            candidate_inputs.append(proj / bg if not Path(bg).is_absolute() else Path(bg))
+
+    for inp in candidate_inputs:
+        m = _mtime(inp)
+        if m is None:
+            continue
+        if final_mtime < m:
+            reasons.append(
+                f"{inp.name} ({_iso(m)}) is newer than out/{out_name} ({_iso(final_mtime)})"
+            )
+    return {"up_to_date": not reasons, "reasons": reasons}
+
+
+def _check_transcribe(proj: Path) -> dict:
+    project_path = proj / "project.json"
+    if not project_path.exists():
+        return {"up_to_date": False, "reasons": ["project.json missing."]}
+    project = _read_json(project_path) or {}
+    sources = project.get("sources") or []
+    if not sources:
+        return {"up_to_date": True, "reasons": []}
+
+    reasons: list[str] = []
+    for src in sources:
+        if not isinstance(src, dict) or "id" not in src or "path" not in src:
+            continue
+        sid = src["id"]
+        src_path = proj / src["path"]
+        tx = proj / "transcripts" / f"{sid}.json"
+        tx_mtime = _mtime(tx)
+        if tx_mtime is None:
+            reasons.append(f"transcripts/{sid}.json missing")
+            continue
+        src_mtime = _mtime(src_path)
+        if src_mtime is not None and tx_mtime < src_mtime:
+            reasons.append(
+                f"source {sid} ({_iso(src_mtime)}) is newer than "
+                f"transcripts/{sid}.json ({_iso(tx_mtime)})"
+            )
+    return {"up_to_date": not reasons, "reasons": reasons}
+
+
+@mcp.tool()
+def is_up_to_date(
+    slug: str,
+    scope: Optional[str] = None,
+    project_root: Optional[str] = None,
+) -> dict:
+    """Check whether downstream artifacts are still consistent with their inputs.
+
+    Args:
+        slug: Project identifier.
+        scope: One of "tts" | "cut" | "compose" | "transcribe". Omit for all.
+        project_root: Override the default projects/ directory.
+
+    For each scope, returns ``{"up_to_date": bool, "reasons": [str, ...]}``.
+    Reasons name the stale artifact and what input made it stale.
+    """
+    if scope is not None and scope not in _SCOPES:
+        return {
+            "error": f"Unknown scope '{scope}'. Use one of: {list(_SCOPES)} (or omit for all)."
+        }
+    root = _projects_root(project_root)
+    proj = _project_dir(root, slug)
+    if not proj.exists():
+        return {"error": f"Project not found: {proj}. Call init first."}
+
+    checkers: dict[str, Callable[[Path], dict]] = {
+        "tts": _check_tts,
+        "cut": _check_cut,
+        "compose": _check_compose,
+        "transcribe": _check_transcribe,
+    }
+    scopes = [scope] if scope else list(_SCOPES)
+    return {s: checkers[s](proj) for s in scopes}
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
 
 
 def main() -> int:

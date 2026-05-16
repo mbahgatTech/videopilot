@@ -349,6 +349,55 @@ User wants the long video minus dead air, no smart selection.
 
 All commands accept `--quiet` and `--verbose`.
 
+## MCP tools — extras
+
+When you are driving `videopilot` through the MCP server (instead of shelling
+out to the CLI), six helper tools sit alongside the subcommand mirrors. They
+exist so you can author state incrementally and probe staleness without
+re-reading every JSON file.
+
+| Tool | One-liner |
+|---|---|
+| `schema()` | Returns the authoritative JSON Schemas for every state file (`project`, `script`, `cut-plan`, `compose-plan`, `voice-manifest`, `clips-manifest`). |
+| `add_vo_segment(slug, id, text, ...)` | Append or insert one voice segment into `script.json`. Creates the file with sane `voice_defaults` if missing; rejects duplicate ids. |
+| `add_slide(slug, voiceover?, body?, duration_sec?, ...)` | Append or insert one slide into `compose-plan.json`. Creates the file with default 1920x1080@30fps libx264/aac output if missing. Requires `voiceover` OR `duration_sec`. |
+| `set_compose_output(slug, ...)` | Patch only the `output` keys you pass (filename, resolution, fps, bitrates, codecs). Unspecified keys are left intact. |
+| `preview_slide(slug, index)` | Render ONE timeline item to `out/preview-NNN.mp4` so you can iterate on a slide without paying the full-timeline cost. |
+| `is_up_to_date(slug, scope?)` | mtime-based staleness check. `scope` is `"tts"`, `"cut"`, `"compose"`, `"transcribe"`, or omit for all. Returns `{up_to_date, reasons}` per scope. |
+
+Tiny example — incrementally build a project:
+
+```
+add_vo_segment(slug="demo", id="vo-intro", text="Welcome.")
+add_slide(slug="demo", voiceover="vo-intro", title="Hello", body=["Point one", "Point two"])
+preview_slide(slug="demo", index=0)        # eyeball the slide
+is_up_to_date(slug="demo", scope="tts")     # before re-running tts
+```
+
+Notes:
+
+- **`schema` is the source of truth.** If a state file's contract evolves,
+  the schema reflects it before this doc does. Call it when in doubt.
+- **Prefer `add_vo_segment` / `add_slide` over raw `write_state`** for
+  incremental builds — the helpers validate inputs, refuse id collisions,
+  and create missing files with sane defaults.
+- **`preview_slide` is the cheap iteration loop.** Use it while tweaking
+  `title` / `subtitle` / `body` / colors instead of re-running `compose`.
+- **`is_up_to_date` is the right call before re-running expensive ops**
+  (`tts`, `cut`, `transcribe`, `compose`). Skip the op if every scope you
+  care about reports `up_to_date: true`.
+
+### Progress notifications
+
+The MCP server now emits `notifications/progress` while `tts`, `transcribe`,
+`compose`, `cut`, and `silence` run. Hosts that support MCP progress
+(GitHub Copilot CLI, Claude, etc.) display live updates instead of staring at
+a frozen tool call. The work runs on a worker thread, so the call no longer
+trips MCP's request timeout on long renders.
+
+The previous workaround of polling `tmp/` for fresh intermediate files is no
+longer needed — watch the progress stream instead.
+
 ## Conventions you must follow
 
 1. **Always run `doctor` first** in a new session if you don't know whether
@@ -370,6 +419,10 @@ All commands accept `--quiet` and `--verbose`.
    and the user often wants edits. Same for `cut-plan.json` before `cut`.
 9. **Final render preview**: after `compose`, tell the user where `out/final.mp4`
    is and offer to open it (`Start-Process .\projects\<slug>\out\final.mp4`).
+10. **Prefer `add_vo_segment` / `add_slide` over manually-authored `write_state`
+    payloads when building incrementally** — the helpers validate inputs,
+    refuse id collisions, and create missing files with sane defaults. Reach
+    for `write_state` only when you genuinely need to replace a whole file.
 
 ## Why no Clipchamp export
 
@@ -398,6 +451,7 @@ be imported as pre-cut pieces.
 | `cut`: "stream copy failed" | Source has unusual codec / variable framerate | Pass `--reencode` to `cut` to force decode/encode |
 | `compose`: timeline durations don't match expectation | `pad_to_voiceover` interaction with short clips | Re-check `clips/manifest.json` vs `voice/manifest.json`; adjust `cut-plan.json` |
 | `compose`: audio glitch at clip boundaries | Concat demuxer with mismatched audio params | Already mitigated — `compose` re-encodes per-segment intermediates; if it persists, file a bug with the intermediates |
+| MCP `tts` / `transcribe` / `compose` / `cut` / `silence` appears to "hang" with no output | Client host doesn't render `notifications/progress` | Not a crash — the server runs the op on a worker thread and will return when done. Wait, or switch to a host that displays MCP progress (Copilot CLI, Claude). |
 
 When in doubt, the intermediates in `tmp/` are kept after every `compose` run
 (not auto-cleaned) so you can inspect what happened at each step.
