@@ -1,8 +1,8 @@
-"""`videopilot doctor` — check prerequisites and print a status report."""
+"""`videopilot doctor` -- check prerequisites and print a status report."""
 
 from __future__ import annotations
 
-import importlib
+import importlib.metadata
 import importlib.util
 import os
 import shutil
@@ -29,6 +29,23 @@ def _have_pkg(name: str) -> bool:
         return False
 
 
+def _pkg_version(dist_name: str) -> str:
+    """Return the installed version of a distribution without importing it.
+
+    Reading version from package metadata (PKG-INFO / METADATA) is fast and
+    side-effect-free. The previous implementation called
+    `importlib.import_module(...)` here, which forced a full module import --
+    fine for pure-Python libs (edge-tts) but catastrophic for libraries with
+    heavy native extensions (faster-whisper pulls in CTranslate2 + onnxruntime
+    + tokenizers DLLs). When called from the MCP worker thread on a fresh
+    process, that import can stall for >15s and trip the client timeout.
+    """
+    try:
+        return importlib.metadata.version(dist_name)
+    except importlib.metadata.PackageNotFoundError:
+        return "?"
+
+
 def run() -> int:
     print("video-creator prerequisite check")
     print("=" * 50)
@@ -51,19 +68,19 @@ def run() -> int:
         failures += 1
 
     print("\nPython packages:")
-    for pkg, friendly in [
+    # Pairs of (module-import-name, distribution-name on PyPI).
+    # find_spec() answers "is the module importable?" using only the importer
+    # and metadata.version() answers "what version was installed?" without
+    # actually importing the module -- so heavy native libs (faster-whisper)
+    # never have to execute their __init__ in a redirected/threaded context.
+    for pkg, dist in [
         ("edge_tts", "edge-tts"),
         ("faster_whisper", "faster-whisper"),
     ]:
         if _have_pkg(pkg):
-            try:
-                mod = importlib.import_module(pkg)
-                ver = getattr(mod, "__version__", "?")
-                _ok(f"{friendly} ({ver})")
-            except Exception as exc:
-                _warn(f"{friendly} importable but errored: {exc}")
+            _ok(f"{dist} ({_pkg_version(dist)})")
         else:
-            _bad(f"{friendly} not installed. `pip install -r requirements.txt`")
+            _bad(f"{dist} not installed. `pip install -r requirements.txt`")
             failures += 1
 
     print("\nOptional packages:")
@@ -82,11 +99,20 @@ def run() -> int:
     if shutil.which("ffmpeg"):
         try:
             import subprocess
+            # Bounded timeout: `ffmpeg -version` normally returns in <100ms.
+            # The 10s cap prevents a wedged / broken binary from stalling the
+            # MCP `doctor` call indefinitely (a heartbeat keeps the client
+            # alive, but it shouldn't mask a real hang forever).
             out = subprocess.run(
-                ["ffmpeg", "-version"], capture_output=True, text=True
+                ["ffmpeg", "-version"],
+                capture_output=True,
+                text=True,
+                timeout=10,
             )
             first = (out.stdout or "").splitlines()[0] if out.stdout else "?"
             _ok(first)
+        except subprocess.TimeoutExpired:
+            _warn("`ffmpeg -version` did not return within 10s (binary may be hung)")
         except Exception as exc:
             _warn(f"ffmpeg present but `-version` failed: {exc}")
 
