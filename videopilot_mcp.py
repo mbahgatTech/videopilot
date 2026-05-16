@@ -408,6 +408,10 @@ async def transcribe(
         source_id: Source id to transcribe (e.g. "raw1").
         model: faster-whisper model size: tiny | base | small | medium | large-v3.
         language: ISO code, e.g. "en". Auto-detect if omitted.
+
+    Returns a SUMMARY of the transcript -- the full segment list can be huge
+    (hundreds of KB) so it is intentionally not inlined. Read the file at
+    ``transcript_path`` if you need every word.
     """
     root = _projects_root(project_root)
     rc, log = await _run_threaded(
@@ -419,12 +423,31 @@ async def transcribe(
         language=language,
         ctx=ctx,
     )
-    tx_path = _project_dir(root, slug) / "transcripts" / f"{source_id}.json"
+    proj = _project_dir(root, slug)
+    tx_path = proj / "transcripts" / f"{source_id}.json"
+    srt_path = proj / "transcripts" / f"{source_id}.srt"
+    data = _read_json(tx_path) or {}
+    segments_list = data.get("segments", []) if isinstance(data, dict) else []
+    preview = [
+        (s.get("text") or "").strip()
+        for s in segments_list[:3]
+        if isinstance(s, dict)
+    ]
+    summary = {
+        "segment_count": len(segments_list),
+        "language": data.get("language") if isinstance(data, dict) else None,
+        "language_probability": (
+            data.get("language_probability") if isinstance(data, dict) else None
+        ),
+        "duration_sec": data.get("duration_sec") if isinstance(data, dict) else None,
+        "preview": preview,
+    }
     return {
         "exit_code": rc,
         "log": log,
         "transcript_path": str(tx_path),
-        "transcript": _read_json(tx_path),
+        "srt_path": str(srt_path) if srt_path.exists() else None,
+        "summary": summary,
     }
 
 
