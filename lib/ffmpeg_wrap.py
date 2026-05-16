@@ -211,6 +211,7 @@ def _spawn_with_stall_detection(
     """
     proc = subprocess.Popen(
         cmd,
+        stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -309,10 +310,15 @@ def _spawn_with_stall_detection(
                         pass
                 t_err.join(timeout=1.0)
                 t_out.join(timeout=1.0)
+                err_tail = "".join(stderr_lines).strip().splitlines()[-15:]
+                out_tail = "".join(stdout_lines).strip().splitlines()[-15:]
                 raise FFmpegError(
                     f"ffmpeg stalled: no output for {stall_threshold_sec:.0f}s "
                     f"(likely deadlocked filter graph or wedged input). "
-                    f"Process killed.\n  command: {_quote_cmd(cmd)}"
+                    f"Process killed.\n  command: {_quote_cmd(cmd)}\n"
+                    f"  stderr_lines={len(stderr_lines)} stdout_lines={len(stdout_lines)}\n"
+                    f"  stderr tail: {err_tail!r}\n"
+                    f"  stdout tail: {out_tail!r}"
                 )
             time.sleep(0.25)
     finally:
