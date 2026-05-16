@@ -9,6 +9,7 @@ Pipeline:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -141,6 +142,17 @@ def _scale_pad(rp: RenderParams) -> str:
     )
 
 
+def _format_body_line(line: str) -> str:
+    """Apply bullet prefix unless line already starts with a list marker."""
+    if re.match(r"^\d+\. ", line):
+        return line
+    if line.startswith("• "):
+        return line
+    if line.startswith("-  "):
+        return line
+    return "•  " + line
+
+
 def _build_drawtext_filters(
     item: dict, rp: RenderParams, tmp_dir: Path, idx: int, font: str
 ) -> list[str]:
@@ -149,6 +161,7 @@ def _build_drawtext_filters(
     filters: list[str] = []
     title = item.get("title")
     subtitle = item.get("subtitle")
+    body = item.get("body") or []
     if title:
         tf = _write_textfile(tmp_dir, f"seg_{idx:03d}_title.txt", title)
         filters.append(
@@ -161,6 +174,17 @@ def _build_drawtext_filters(
             f"drawtext=fontfile={font}:textfile={sf}:fontsize=42:fontcolor=white"
             f":x=(w-text_w)/2:y=(h/2)+20"
         )
+    if body:
+        base_offset = 110
+        line_height = 56
+        for li, raw in enumerate(body):
+            text = _format_body_line(str(raw))
+            bf = _write_textfile(tmp_dir, f"seg_{idx:03d}_body_{li:02d}.txt", text)
+            y_expr = f"(h/2)+{base_offset + li * line_height}"
+            filters.append(
+                f"drawtext=fontfile={font}:textfile={bf}:fontsize=36:fontcolor=white"
+                f":x=200:y={y_expr}"
+            )
     return filters
 
 
