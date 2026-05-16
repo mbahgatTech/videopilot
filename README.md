@@ -11,11 +11,11 @@
 [![ffmpeg](https://img.shields.io/badge/depends-ffmpeg-orange.svg)](https://ffmpeg.org)
 
 `videopilot` is an **MCP (Model Context Protocol) server** that lets a calling
-LLM — GitHub Copilot CLI, Claude Code, Cursor, Continue.dev, or any MCP-aware
-client — turn raw screen recordings into narrated, edited MP4s. The server
-exposes 20 tools covering the full pipeline: neural TTS voiceover,
-faster-whisper transcription, silence detection, clip cutting, timeline
-composition with slides and audio ducking, and NLE export to EDL / FCPXML.
+LLM — driven by GitHub Copilot CLI or any other MCP-aware client — turn raw
+screen recordings into narrated, edited MP4s. The server exposes 20 tools
+covering the full pipeline: neural TTS voiceover, faster-whisper
+transcription, silence detection, clip cutting, timeline composition with
+slides and audio ducking, and NLE export to EDL / FCPXML.
 
 The MCP server is the **primary interface**. A standalone `videopilot` CLI
 ships alongside it for manual or scripted runs — useful for one-off stages,
@@ -96,45 +96,31 @@ The plugin's `init` skill runs the same installer logic for you.
 
 ## Connect to an MCP client
 
-`videopilot-mcp` runs the MCP server over stdio. Point any MCP-aware client
-at it.
-
-### GitHub Copilot CLI
-
-```
-gh copilot mcp add videopilot videopilot-mcp
-```
-
-Or hand-edit `~/.config/github-copilot/mcp_config.json`:
+`videopilot-mcp` runs the MCP server over stdio. The verified config for the
+GitHub Copilot CLI (`~/.copilot/mcp-config.json`) is:
 
 ```json
 {
   "mcpServers": {
-    "videopilot": { "command": "videopilot-mcp" }
+    "videopilot": {
+      "type": "stdio",
+      "command": "uvx",
+      "args": ["--from", "videopilot", "videopilot-mcp"],
+      "tools": ["*"]
+    }
   }
 }
 ```
 
-### Claude Desktop
+`uvx` pulls the latest `videopilot` from PyPI into an ephemeral environment
+and runs the `videopilot-mcp` entry point — no global install required. If
+you already have `videopilot` installed globally (`pip install --user
+videopilot`) you can instead use `"command": "videopilot-mcp"` with no
+`args`.
 
-Config locations:
-
-- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
-- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
-- Linux: `~/.config/Claude/claude_desktop_config.json`
-
-```json
-{
-  "mcpServers": {
-    "videopilot": { "command": "videopilot-mcp" }
-  }
-}
-```
-
-### Cursor / Continue.dev / generic MCP client
-
-Register a stdio MCP server with command `videopilot-mcp`. Refer to your
-client's MCP docs for the exact config-file location and schema.
+Any MCP-aware client that supports stdio servers can run `videopilot-mcp`
+the same way — consult your client's docs for the exact config-file
+location and schema.
 
 After your client restarts, the agent can call any of the 20 `videopilot.*`
 tools below.
