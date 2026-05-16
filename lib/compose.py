@@ -243,10 +243,11 @@ def run(
         if progress is not None:
             progress(1, 1, f"segment 1/1 ({kind})")
         if kind == "clip":
-            _render_clip(proj, item, clips_by_id, voice_by_id, rp, preview_path)
+            _render_clip(proj, item, clips_by_id, voice_by_id, rp, preview_path, progress=progress)
         elif kind == "slide":
             _render_slide(
-                proj, item, voice_by_id, rp, tmp_dir, only_index + 1, font, preview_path
+                proj, item, voice_by_id, rp, tmp_dir, only_index + 1, font, preview_path,
+                progress=progress,
             )
         elif kind == "gap":
             _render_gap(item, rp, preview_path)
@@ -264,9 +265,9 @@ def run(
         if progress is not None:
             progress(idx, total_segs, f"segment {idx}/{total_segs} ({kind})")
         if kind == "clip":
-            _render_clip(proj, item, clips_by_id, voice_by_id, rp, seg_out)
+            _render_clip(proj, item, clips_by_id, voice_by_id, rp, seg_out, progress=progress)
         elif kind == "slide":
-            _render_slide(proj, item, voice_by_id, rp, tmp_dir, idx, font, seg_out)
+            _render_slide(proj, item, voice_by_id, rp, tmp_dir, idx, font, seg_out, progress=progress)
         elif kind == "gap":
             _render_gap(item, rp, seg_out)
         else:
@@ -318,6 +319,7 @@ def _render_clip(
     voice_by_id: dict[str, dict],
     rp: RenderParams,
     out_path: Path,
+    progress: ProgressCb | None = None,
 ) -> None:
     cid = item.get("clip")
     if not cid or cid not in clips_by_id:
@@ -374,6 +376,7 @@ def _render_clip(
         args += ["-filter_complex", ";".join(filter_complex_parts)]
         args += ["-map", "[vout]", "-map", "[aout]"]
         args += ["-t", f"{target_dur:.3f}"]
+        render_dur = target_dur
     else:
         filter_complex_parts.append(f"[0:v]{_scale_pad(rp)}[vout]")
         src_vol_expr = "volume=0" if mute_src else None
@@ -387,10 +390,11 @@ def _render_clip(
             )
         args += ["-filter_complex", ";".join(filter_complex_parts)]
         args += ["-map", "[vout]", "-map", "[aout]"]
+        render_dur = clip_dur
 
     args += rp.video_encode_args() + rp.audio_encode_args()
     args += [str(out_path)]
-    ffmpeg_wrap.run_ffmpeg(args)
+    ffmpeg_wrap.run_ffmpeg(args, progress=progress, target_duration_sec=render_dur)
 
 
 def _render_slide(
@@ -402,6 +406,7 @@ def _render_slide(
     idx: int,
     font: str,
     out_path: Path,
+    progress: ProgressCb | None = None,
 ) -> None:
     vo_id = item.get("voiceover")
     duration = item.get("duration_sec")
@@ -460,7 +465,7 @@ def _render_slide(
     args += ["-t", f"{total:.3f}"]
     args += rp.video_encode_args() + rp.audio_encode_args()
     args += [str(out_path)]
-    ffmpeg_wrap.run_ffmpeg(args)
+    ffmpeg_wrap.run_ffmpeg(args, progress=progress, target_duration_sec=total)
 
 
 def _render_gap(item: dict, rp: RenderParams, out_path: Path) -> None:
