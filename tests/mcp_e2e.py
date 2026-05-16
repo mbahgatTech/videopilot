@@ -79,6 +79,26 @@ def _looks_like_network_failure(text: str) -> bool:
     return any(n in low for n in needles)
 
 
+def _looks_like_missing_ffmpeg(text: str) -> bool:
+    """Recognise the "ffmpeg/ffprobe not installed" environmental failure.
+
+    The MCP fixes the user asked for (threaded + heartbeats + nested-asyncio
+    isolation) are orthogonal to whether the host machine actually has the
+    ffmpeg toolchain installed. When ffmpeg is absent, tts / compose / cut
+    / silence will fail at the `ffmpeg_wrap.probe()` call -- that's an
+    environment problem (`videopilot doctor` flags it), not a regression
+    in the MCP plumbing, so the test SKIPs instead of FAILing.
+    """
+    if not text:
+        return False
+    low = text.lower()
+    return (
+        "ffmpeg not found on path" in low
+        or "ffprobe not found on path" in low
+        or "ffmpeg / ffprobe not on path" in low
+    )
+
+
 # ---------------------------------------------------------------------------
 # MCP convenience wrappers
 # ---------------------------------------------------------------------------
@@ -207,6 +227,100 @@ async def run_validation() -> int:
                 except Exception:
                     record("schema_returns_body_field", "FAIL", traceback.format_exc(limit=2).strip().splitlines()[-1])
                     overall_failure = True
+
+                # --- 2b. doctor (no-network, no-asyncio-crash, no -32001) ----
+                # Doctor used to run sync on the FastMCP event loop, which (a)
+                # blocked the request loop during `subprocess.run(ffmpeg)` and
+                # (b) gave the agent nothing to fall back on when the call
+                # timed out. After the threaded + heartbeat fix it should
+                # always return within ~10s with a structured `log` and `ok`.
+                try:
+                    doctor_t0 = time.monotonic()
+                    r = await call(session, "doctor", {}, timeout_s=60)
+                    elapsed = time.monotonic() - doctor_t0
+                    if "ok" not in r or "log" not in r:
+                        record(
+                            "doctor_returns_structured_result",
+                            "FAIL",
+                            f"missing keys; got: {sorted(r.keys())}",
+                        )
+                        overall_failure = True
+                    elif "cannot be called from a running event loop" in (
+                        r.get("log") or ""
+                    ):
+                        record(
+                            "doctor_returns_structured_result",
+                            "FAIL",
+                            "asyncio loop crash leaked into doctor.log",
+                        )
+                        overall_failure = True
+                    else:
+                        record(
+                            "doctor_returns_structured_result",
+                            "PASS",
+                            f"({elapsed:.1f}s, ok={r.get('ok')})",
+                        )
+                except Exception as exc:
+                    record(
+                        "doctor_returns_structured_result",
+                        "FAIL",
+                        f"{exc!r}",
+                    )
+                    overall_failure = True
+
+                # --- 2c. voices (the nested-asyncio.run repro) ---------------
+                # `lib/voices.py::_edge()` calls `asyncio.run(...)` internally.
+                # When voices was a sync MCP tool, that crashed with
+                # "asyncio.run() cannot be called from a running event loop".
+                # The threaded wrapper isolates the nested loop -- verify it
+                # no longer leaks the crash text, regardless of network state.
+                try:
+                    voices_t0 = time.monotonic()
+                    r = await call(
+                        session,
+                        "voices",
+                        {"engine": "edge-tts", "locale": "en-US"},
+                        timeout_s=60,
+                    )
+                    elapsed = time.monotonic() - voices_t0
+                    log_text = (r.get("log") or "") + " " + json.dumps(r)
+                    if "cannot be called from a running event loop" in log_text:
+                        record(
+                            "voices_no_asyncio_crash",
+                            "FAIL",
+                            "voices still triggers the nested-event-loop crash",
+                        )
+                        overall_failure = True
+                    elif r.get("exit_code") == 0:
+                        record(
+                            "voices_no_asyncio_crash",
+                            "PASS",
+                            f"({elapsed:.1f}s, listed voices)",
+                        )
+                    elif _looks_like_network_failure(r.get("log") or ""):
+                        record(
+                            "voices_no_asyncio_crash",
+                            "SKIP",
+                            f"network failure ({elapsed:.1f}s)",
+                        )
+                    else:
+                        record(
+                            "voices_no_asyncio_crash",
+                            "FAIL",
+                            f"exit_code={r.get('exit_code')} log={(r.get('log') or '')[:160]!r}",
+                        )
+                        overall_failure = True
+                except Exception as exc:
+                    tb = traceback.format_exc()
+                    if _looks_like_network_failure(tb) or _looks_like_network_failure(str(exc)):
+                        record(
+                            "voices_no_asyncio_crash",
+                            "SKIP",
+                            f"network-flavored exception: {exc!r}",
+                        )
+                    else:
+                        record("voices_no_asyncio_crash", "FAIL", f"{exc!r}")
+                        overall_failure = True
 
                 # --- 3. init ------------------------------------------------
                 # init seeds a starter `vo-intro` segment + a starter slide.
@@ -456,12 +570,20 @@ async def run_validation() -> int:
                         overall_failure = True
                         skip_network_block = True  # don't run downstream
                     elif r.get("exit_code") != 0:
-                        # Distinguish network failure from a real defect.
-                        if _looks_like_network_failure(r.get("log") or ""):
+                        # Distinguish network failure / missing toolchain from a real defect.
+                        log_only = r.get("log") or ""
+                        if _looks_like_network_failure(log_only):
                             record(
                                 "tts_no_asyncio_crash",
                                 "SKIP",
                                 f"network failure in edge-tts ({elapsed:.1f}s)",
+                            )
+                            skip_network_block = True
+                        elif _looks_like_missing_ffmpeg(log_only):
+                            record(
+                                "tts_no_asyncio_crash",
+                                "SKIP",
+                                f"ffmpeg/ffprobe not installed on test host ({elapsed:.1f}s)",
                             )
                             skip_network_block = True
                         else:
@@ -815,7 +937,7 @@ async def run_validation() -> int:
                 try:
                     # Import the server module locally and inspect the transcribe handler.
                     sys.path.insert(0, str(REPO_ROOT))
-                    import videopilot_mcp as vp_mcp  # noqa: WPS433
+                    import videopilot_mcp as vp_mcp
 
                     src = inspect.getsource(vp_mcp.transcribe.fn) if hasattr(vp_mcp.transcribe, "fn") else inspect.getsource(vp_mcp.transcribe)
                     must_have_keys = (

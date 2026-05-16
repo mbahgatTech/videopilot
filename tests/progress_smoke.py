@@ -18,8 +18,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 
-from lib import compose as compose_mod  # noqa: E402
-from lib import tts as tts_mod  # noqa: E402
+from lib import compose as compose_mod
+from lib import tts as tts_mod
 
 
 def main() -> int:

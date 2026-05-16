@@ -10,15 +10,29 @@ Launch (after `pip install videopilot` or via `uvx`):
 
 The companion plugin's `.mcp.json` registers this command for the agent host.
 
-Tools mirror the CLI subcommands. Long-running tools (`tts`, `transcribe`,
-`compose`, `cut`, `silence`) run on a worker thread so they neither block the
-FastMCP request loop nor crash on nested `asyncio.run()` calls inside lib
-modules, and they stream `Context.report_progress` heartbeats so MCP clients
-don't time out (-32001). Helper tools (`read_state`, `write_state`,
-`add_vo_segment`, `add_slide`, `set_compose_output`) let the agent author the
-per-project JSON state files. `schema()`, `preview_slide()`, and
-`is_up_to_date()` round out the surface for discovery, fast feedback, and
-idempotency probing.
+Tools mirror the CLI subcommands. Every tool that drives a lib `.run()`
+function -- short or long, pure-Python or `asyncio.run()`-using or
+subprocess-shelling -- executes on a worker thread via `_run_threaded`. This
+gives every tool four properties for free:
+
+  1. Nested `asyncio.run(...)` inside the lib (edge-tts, voices) succeeds
+     because the worker thread has no pre-existing event loop.
+  2. Long-running lib work (tts, compose, transcribe, large file copies in
+     `import_source`) never blocks FastMCP's request loop -- the loop stays
+     free to handle other requests and pump notifications.
+  3. The MCP client receives a `Context.report_progress` heartbeat every
+     ``_HEARTBEAT_INTERVAL_SEC`` seconds for the lifetime of the worker, so
+     long calls survive the client's -32001 idle timeout.
+  4. Exceptions inside the lib are caught and returned as `(rc=1, log+tb)`
+     instead of being re-raised. FastMCP's default exception handler would
+     otherwise discard the captured stdout in favor of a bare "Error
+     executing tool X: <repr>", hiding the diagnostic output the agent
+     needs to recover.
+
+Helper tools (`read_state`, `write_state`, `add_vo_segment`, `add_slide`,
+`set_compose_output`) let the agent author the per-project JSON state files.
+`schema()`, `preview_slide()`, and `is_up_to_date()` round out the surface for
+discovery, fast feedback, and idempotency probing.
 """
 
 from __future__ import annotations
@@ -26,6 +40,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import io
+import traceback
 import json
 import os
 import sys
@@ -39,7 +54,7 @@ HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
     sys.path.insert(0, str(HERE))
 
-from lib import (  # noqa: E402  (must happen after sys.path tweak)
+from lib import (
     compose as compose_mod,
     cut as cut_mod,
     doctor as doctor_mod,
@@ -140,16 +155,24 @@ def _mtime(path: Path) -> Optional[float]:
 # Sync + threaded execution helpers
 # ---------------------------------------------------------------------------
 
+# Wall-clock interval between MCP `report_progress` heartbeats emitted by
+# `_run_threaded` when the wrapped lib function isn't generating its own
+# progress events. The MCP request timeout (-32001) defaults to ~30-60s in
+# typical clients (Copilot, Claude, Continue.dev), so 5s gives a comfortable
+# 6-12x safety margin -- chatty enough to keep keep-alive happy, sparse enough
+# not to flood the client's progress UI.
+_HEARTBEAT_INTERVAL_SEC = 5.0
 
-def _capture(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> tuple[int, str]:
-    """Run a sync lib `.run()` function while capturing stdout+stderr."""
-    buf = io.StringIO()
-    with redirect_stdout(buf), redirect_stderr(buf):
-        try:
-            rc = fn(*args, **kwargs)
-        except SystemExit as e:
-            rc = int(e.code or 0)
-    return int(rc or 0), buf.getvalue()
+# `redirect_stdout` / `redirect_stderr` swap the *process-global* `sys.stdout`
+# and `sys.stderr`. The MCP stdio transport also writes its framed JSON-RPC
+# messages to `sys.stdout`, so two captured-output tool calls running in
+# parallel could:
+#   - interleave each other's captured logs, OR
+#   - leak lib `print()` output into the MCP transport and break framing.
+# A single module-level lock serialises any stdout/stderr capture across all
+# `_run_threaded` workers. The performance cost is bounded by typical agent
+# behaviour (tool calls already happen sequentially).
+_CAPTURE_LOCK = threading.Lock()
 
 
 async def _run_threaded(
@@ -158,12 +181,45 @@ async def _run_threaded(
     ctx: Optional[Context] = None,
     **kwargs: Any,
 ) -> tuple[int, str]:
-    """Run a sync lib `.run()` on a worker thread, bridging its `progress`
-    callback to `ctx.report_progress` so MCP clients keep the request alive.
+    """Run a sync lib `.run()` on a worker thread, streaming MCP progress.
 
-    The helper inspects ``fn``'s signature: if it accepts ``progress``, a
-    thread-safe callback is injected. Otherwise the call is forwarded as-is.
-    Stdout + stderr are captured and returned alongside the exit code.
+    Four invariants hold for every caller:
+
+    1. The wrapped function runs on a freshly-spawned `threading.Thread`, so
+       any nested `asyncio.run(...)` it does (edge-tts, voices, ...) sees an
+       empty event-loop slot and succeeds. This is the original "no nested
+       event loop" fix.
+
+    2. The MCP client receives a `ctx.report_progress` notification at least
+       every ``_HEARTBEAT_INTERVAL_SEC`` seconds for as long as the worker is
+       alive. If ``fn`` accepts a ``progress`` keyword argument, its
+       structured events ride alongside the heartbeats; otherwise the
+       heartbeat is the only signal -- which is exactly what we need for
+       lib functions that pre-date the `progress` contract (``cut``,
+       ``silence``, ``voices``, ``doctor``, ...).
+
+    3. The wire `progress` value emitted to MCP is monotonically increasing
+       (a private ``tick`` counter incremented on every emit). The lib's own
+       ``current / total`` numbers may dip / repeat / overshoot -- they get
+       embedded in the human-readable message instead, so the MCP spec's
+       monotonicity rule is never violated.
+
+    4. This coroutine **never raises**: it always returns ``(rc, log)``. When
+       ``fn`` raises, ``rc`` is set to ``1`` and the traceback is appended to
+       the captured ``log``. This is critical for agent UX -- FastMCP's
+       default exception handler discards the captured stdout/stderr and
+       replaces the response with ``"Error executing tool X: <repr>"``, which
+       hides the diagnostic output the agent needs to recover (e.g. tts
+       prints "Synthesizing 3 segments... vo-1 done... ffprobe missing" --
+       the agent should see all of that, not just the final raise).
+
+    `wire total` is always `None`: pairing a synthetic monotonic tick with
+    the lib's `total` would make tick blow past total (e.g. tts total=1,
+    heartbeats keep ticking 2, 3, 4...) and some clients enforce
+    `progress <= total`. The lib's `cur/total` lives in the message instead.
+
+    Stdout + stderr are captured behind `_CAPTURE_LOCK` and returned alongside
+    the exit code.
     """
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[tuple[Any, ...]] = asyncio.Queue()
@@ -180,46 +236,90 @@ async def _run_threaded(
         buf = io.StringIO()
         rc = 0
         try:
-            with redirect_stdout(buf), redirect_stderr(buf):
-                call_kwargs = dict(kwargs)
-                if accepts_progress:
-                    call_kwargs["progress"] = thread_progress
-                rc = fn(*args, **call_kwargs) or 0
-        except SystemExit as e:
-            rc = int(e.code or 0)
-        except BaseException as e:  # noqa: BLE001
-            loop.call_soon_threadsafe(
-                queue.put_nowait, ("error", e, buf.getvalue())
-            )
-            return
+            with _CAPTURE_LOCK:
+                with redirect_stdout(buf), redirect_stderr(buf):
+                    call_kwargs = dict(kwargs)
+                    if accepts_progress:
+                        call_kwargs["progress"] = thread_progress
+                    try:
+                        rc = fn(*args, **call_kwargs) or 0
+                    except SystemExit as e:
+                        # Libs use `raise SystemExit("message")` for clean
+                        # failures with a non-zero code. Surface the code AND
+                        # the message text in the captured log.
+                        rc = int(e.code) if isinstance(e.code, int) else 1
+                        if e.code and not isinstance(e.code, int):
+                            print(f"\n{e.code}", file=sys.stderr)
+                    except Exception:
+                        # Any other exception -- record traceback in the log
+                        # and fail with rc=1. The async receive loop turns
+                        # this into a normal `(rc, log)` return so the agent
+                        # sees the full captured diagnostic.
+                        rc = 1
+                        print(
+                            "\n--- traceback ---\n" + traceback.format_exc(),
+                            file=sys.stderr,
+                        )
+        except BaseException:
+            # Anything that escapes the redirect block -- e.g. the lock
+            # acquire was interrupted -- still has to deliver a structured
+            # result. Re-raising into the asyncio loop would freeze the
+            # coroutine indefinitely.
+            rc = 1
+            buf.write("\n--- worker-level traceback ---\n")
+            buf.write(traceback.format_exc())
         loop.call_soon_threadsafe(
             queue.put_nowait, ("done", int(rc), buf.getvalue())
         )
 
     threading.Thread(target=worker, daemon=True).start()
 
+    tick = 0
+    last_lib_message = "working"
+    start = loop.time()
+
+    async def emit(message: str) -> None:
+        nonlocal tick
+        tick += 1
+        if ctx is None:
+            return
+        try:
+            await ctx.report_progress(
+                progress=float(tick),
+                total=None,
+                message=message,
+            )
+        except Exception:
+            # Never let a flaky client kill a render: progress notifications
+            # are best-effort heartbeats, not part of the tool's contract.
+            pass
+
+    # Immediate "we're alive" tick so clients with very aggressive keep-alives
+    # don't go a full heartbeat interval seeing nothing.
+    await emit("starting")
+
     while True:
-        evt = await queue.get()
+        try:
+            evt = await asyncio.wait_for(
+                queue.get(), timeout=_HEARTBEAT_INTERVAL_SEC
+            )
+        except asyncio.TimeoutError:
+            elapsed = int(loop.time() - start)
+            await emit(f"{last_lib_message} (still working, {elapsed}s elapsed)")
+            continue
+
         kind = evt[0]
         if kind == "progress":
             _, cur, total, msg = evt
-            if ctx is not None:
-                try:
-                    await ctx.report_progress(
-                        progress=float(cur),
-                        total=float(total) if total else None,
-                        message=msg or None,
-                    )
-                except Exception:  # noqa: BLE001 -- never let a flaky client kill a render
-                    pass
+            if msg:
+                last_lib_message = msg
+            detail = msg or "progress"
+            if total:
+                detail = f"{detail} ({cur}/{total})"
+            await emit(detail)
         elif kind == "done":
             _, rc, log = evt
             return int(rc), log
-        elif kind == "error":
-            _, exc, log = evt
-            # Surface captured output before re-raising so the agent has context.
-            sys.stderr.write(log)
-            raise exc
 
 
 # ---------------------------------------------------------------------------
@@ -253,29 +353,47 @@ mcp = FastMCP("videopilot")
 
 
 # ---------------------------------------------------------------------------
-# Short / sync tools (kept on the request thread; no progress streaming)
+# Short tools (kept on the request thread; threaded only where the lib calls
+# `asyncio.run()` internally or invokes blocking subprocesses)
 # ---------------------------------------------------------------------------
 
 
 @mcp.tool()
-def doctor() -> dict:
+async def doctor(ctx: Optional[Context] = None) -> dict:
     """Verify that ffmpeg, ffprobe, edge-tts, faster-whisper, and (optionally)
     Azure Speech credentials are available on this machine. Returns the log
     text and a boolean ok flag. Call this once before starting a project.
+
+    Runs on a worker thread because it shells out to `ffmpeg -version` -- on
+    a slow / missing-PATH machine that subprocess can stall briefly, and
+    blocking the FastMCP event loop trips the client's -32001 request
+    timeout. The thread also unlocks heartbeat streaming via `_run_threaded`.
     """
-    rc, log = _capture(doctor_mod.run)
+    rc, log = await _run_threaded(doctor_mod.run, ctx=ctx)
     return {"exit_code": rc, "ok": rc == 0, "log": log}
 
 
 @mcp.tool()
-def voices(engine: str = "edge-tts", locale: Optional[str] = None) -> dict:
+async def voices(
+    engine: str = "edge-tts",
+    locale: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> dict:
     """List available neural TTS voices.
 
     Args:
         engine: "edge-tts" (default, free) or "azure" (needs AZURE_SPEECH_KEY).
         locale: Optional locale filter, e.g. "en-US".
+
+    Runs on a worker thread because `lib/voices.py` calls
+    `asyncio.run(edge_tts.list_voices())` internally; doing that on the
+    FastMCP request loop raises "asyncio.run() cannot be called from a
+    running event loop". The worker thread has no event loop of its own, so
+    the nested `asyncio.run` works as designed.
     """
-    rc, log = _capture(voices_mod.run, engine=engine, locale=locale)
+    rc, log = await _run_threaded(
+        voices_mod.run, ctx=ctx, engine=engine, locale=locale
+    )
     return {"exit_code": rc, "log": log}
 
 
@@ -311,11 +429,12 @@ def project_status(slug: str, project_root: Optional[str] = None) -> dict:
 
 
 @mcp.tool()
-def init(
+async def init(
     slug: str,
     source: Optional[list[str]] = None,
     name: Optional[str] = None,
     project_root: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> dict:
     """Create a new project.
 
@@ -330,8 +449,8 @@ def init(
         the agent should now populate).
     """
     root = _projects_root(project_root)
-    rc, log = _capture(
-        init_cmd.run, root, slug, name=name, sources=source or []
+    rc, log = await _run_threaded(
+        init_cmd.run, root, slug, name=name, sources=source or [], ctx=ctx
     )
     out = _status(slug, project_root)
     out["exit_code"] = rc
@@ -340,16 +459,23 @@ def init(
 
 
 @mcp.tool()
-def import_source(
+async def import_source(
     slug: str,
     path: str,
     source_id: Optional[str] = None,
     project_root: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> dict:
-    """Add another source video to an existing project."""
+    """Add another source video to an existing project.
+
+    Runs on a worker thread because `shutil.copy2` of a multi-GB source file
+    can take several seconds, and any blocking call on FastMCP's event loop
+    silently freezes every other request until the MCP client gives up with
+    a -32001 timeout. Heartbeats keep the request alive for the duration.
+    """
     root = _projects_root(project_root)
-    rc, log = _capture(
-        init_cmd.import_source, root, slug, path, source_id=source_id
+    rc, log = await _run_threaded(
+        init_cmd.import_source, root, slug, path, source_id=source_id, ctx=ctx
     )
     out = _status(slug, project_root)
     out["exit_code"] = rc
@@ -591,19 +717,20 @@ async def compose(
 
 
 @mcp.tool()
-def export(
+async def export(
     slug: str,
     edl: bool = False,
     fcpxml: bool = False,
     script: bool = False,
     project_root: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> dict:
     """Emit NLE projects (EDL / FCPXML) and/or a replayable render script for
     the composed timeline.
     """
     root = _projects_root(project_root)
-    rc, log = _capture(
-        export_mod.run, root, slug, edl=edl, fcpxml=fcpxml, script=script
+    rc, log = await _run_threaded(
+        export_mod.run, root, slug, edl=edl, fcpxml=fcpxml, script=script, ctx=ctx
     )
     out_dir = _project_dir(root, slug) / "out"
     exports: dict[str, Optional[str]] = {
@@ -1303,7 +1430,7 @@ def main() -> int:
             from importlib.metadata import version as _pkg_version
 
             print(f"videopilot-mcp {_pkg_version('videopilot')}")
-        except Exception:  # noqa: BLE001
+        except Exception:
             print("videopilot-mcp (version unknown)")
         return 0
 
