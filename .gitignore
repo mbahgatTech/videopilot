@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg
+*.egg-info/
+.eggs/
+
+# Build artifacts
+build/
+dist/
+*.whl
+*.tar.gz
+pip-wheel-metadata/
+MANIFEST
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Test / coverage
+.pytest_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# videopilot per-project workspaces (user data, not source)
+projects/*/
+!projects/.gitkeep
+
+# scratch
+scratch/
+tmp/
