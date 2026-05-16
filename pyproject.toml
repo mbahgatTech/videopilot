@@ -47,6 +47,7 @@ dependencies = [
   "edge-tts>=7.0",
   "faster-whisper>=1.0",
   "azure-cognitiveservices-speech>=1.40",
+  "mcp>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -63,10 +64,11 @@ Issues = "https://github.com/mbahgatTech/videopilot/issues"
 
 [project.scripts]
 videopilot = "videopilot_cli:main"
+videopilot-mcp = "videopilot_mcp:main"
 
 [tool.setuptools]
 packages = ["lib"]
-py-modules = ["videopilot_cli", "videopilot"]
+py-modules = ["videopilot_cli", "videopilot", "videopilot_mcp"]
 include-package-data = true
 
 [tool.setuptools.package-data]
