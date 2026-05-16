@@ -1,0 +1,450 @@
+"""`compose` — render final video per compose-plan.json.
+
+Pipeline:
+  1. Render each timeline item as `tmp/seg_NNN.mp4` at canonical params.
+  2. Concatenate intermediates with the ffmpeg concat demuxer.
+  3. If background_music is configured, mix it under the concat result.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+from . import ffmpeg_wrap
+
+# Canonical fallback render parameters when compose-plan.json omits them.
+_DEFAULT_RES = (1920, 1080)
+_DEFAULT_FPS = 30
+_DEFAULT_VBITRATE = "8M"
+_DEFAULT_ABITRATE = "192k"
+_DEFAULT_VCODEC = "libx264"
+_DEFAULT_ACODEC = "aac"
+_DEFAULT_SR = 48000
+_DEFAULT_AC = 2
+
+_FONT_CANDIDATES = [
+    "C:/Windows/Fonts/segoeui.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+    "C:/Windows/Fonts/calibri.ttf",
+]
+
+
+@dataclass
+class RenderParams:
+    width: int
+    height: int
+    fps: int
+    vbitrate: str
+    abitrate: str
+    vcodec: str
+    acodec: str
+    sr: int
+    ac: int
+
+    @classmethod
+    def from_output(cls, out: dict[str, Any]) -> "RenderParams":
+        res = out.get("resolution", f"{_DEFAULT_RES[0]}x{_DEFAULT_RES[1]}")
+        try:
+            w, h = (int(x) for x in res.lower().split("x"))
+        except Exception:
+            raise SystemExit(f"output.resolution invalid: {res!r}; want e.g. 1920x1080")
+        return cls(
+            width=w,
+            height=h,
+            fps=int(out.get("fps", _DEFAULT_FPS)),
+            vbitrate=str(out.get("video_bitrate", _DEFAULT_VBITRATE)),
+            abitrate=str(out.get("audio_bitrate", _DEFAULT_ABITRATE)),
+            vcodec=str(out.get("video_codec", _DEFAULT_VCODEC)),
+            acodec=str(out.get("audio_codec", _DEFAULT_ACODEC)),
+            sr=int(out.get("sample_rate", _DEFAULT_SR)),
+            ac=int(out.get("audio_channels", _DEFAULT_AC)),
+        )
+
+    def video_encode_args(self) -> list[str]:
+        return [
+            "-c:v", self.vcodec,
+            "-preset", "medium",
+            "-crf", "20",
+            "-b:v", self.vbitrate,
+            "-pix_fmt", "yuv420p",
+            "-r", str(self.fps),
+        ]
+
+    def audio_encode_args(self) -> list[str]:
+        return [
+            "-c:a", self.acodec,
+            "-b:a", self.abitrate,
+            "-ar", str(self.sr),
+            "-ac", str(self.ac),
+        ]
+
+
+def _load_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_json(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+
+def _font_path() -> str:
+    for f in _FONT_CANDIDATES:
+        if Path(f).exists():
+            # Double-escape the drive-letter colon so it survives both
+            # filtergraph-level and filter-level parsing.
+            return f.replace(":", r"\\:")
+    print(
+        "WARNING: No usable system font found; slide title/subtitle text will be skipped.",
+        file=sys.stderr,
+    )
+    return ""
+
+
+def _color_to_ffmpeg(color: str | None) -> str:
+    if not color:
+        return "0x000000"
+    c = color.strip()
+    if c.startswith("#"):
+        return "0x" + c[1:]
+    return c
+
+
+def _escape_drawtext_value(s: str) -> str:
+    # Inside drawtext, escape backslash, colon, and any chars that delimit filter args.
+    return (
+        s.replace("\\", "\\\\")
+        .replace(":", "\\:")
+        .replace("'", "\\'")
+        .replace(",", "\\,")
+        .replace("%", "\\%")
+    )
+
+
+def _write_textfile(tmp_dir: Path, name: str, text: str) -> str:
+    p = tmp_dir / name
+    p.write_text(text, encoding="utf-8")
+    # Forward slashes + double-escaped colon for the drive letter.
+    return str(p).replace("\\", "/").replace(":", r"\\:")
+
+
+def _scale_pad(rp: RenderParams) -> str:
+    return (
+        f"scale={rp.width}:{rp.height}:force_original_aspect_ratio=decrease,"
+        f"pad={rp.width}:{rp.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        f"setsar=1,fps={rp.fps},format=yuv420p"
+    )
+
+
+def _build_drawtext_filters(
+    item: dict, rp: RenderParams, tmp_dir: Path, idx: int, font: str
+) -> list[str]:
+    if not font:
+        return []
+    filters: list[str] = []
+    title = item.get("title")
+    subtitle = item.get("subtitle")
+    if title:
+        tf = _write_textfile(tmp_dir, f"seg_{idx:03d}_title.txt", title)
+        filters.append(
+            f"drawtext=fontfile={font}:textfile={tf}:fontsize=80:fontcolor=white"
+            f":box=0:x=(w-text_w)/2:y=(h/2)-100"
+        )
+    if subtitle:
+        sf = _write_textfile(tmp_dir, f"seg_{idx:03d}_subtitle.txt", subtitle)
+        filters.append(
+            f"drawtext=fontfile={font}:textfile={sf}:fontsize=42:fontcolor=white"
+            f":x=(w-text_w)/2:y=(h/2)+20"
+        )
+    return filters
+
+
+def run(root: Path, slug: str) -> int:
+    proj = root / slug
+    plan_path = proj / "compose-plan.json"
+    if not plan_path.exists():
+        raise SystemExit(f"compose-plan.json missing in {proj}")
+    plan = _load_json(plan_path)
+    timeline = plan.get("timeline", []) or []
+    if not timeline:
+        raise SystemExit("compose-plan.json: timeline is empty.")
+
+    rp = RenderParams.from_output(plan.get("output", {}) or {})
+    out_cfg = plan.get("output", {}) or {}
+    out_name = out_cfg.get("filename", "final.mp4")
+
+    clips_manifest_path = proj / "clips" / "manifest.json"
+    voice_manifest_path = proj / "voice" / "manifest.json"
+    clips_by_id: dict[str, dict] = {}
+    voice_by_id: dict[str, dict] = {}
+    if clips_manifest_path.exists():
+        clips_by_id = {c["id"]: c for c in _load_json(clips_manifest_path).get("clips", [])}
+    if voice_manifest_path.exists():
+        voice_by_id = {v["id"]: v for v in _load_json(voice_manifest_path).get("segments", [])}
+
+    tmp_dir = proj / "tmp"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    for old in tmp_dir.glob("seg_*.mp4"):
+        old.unlink()
+    for old in tmp_dir.glob("seg_*.txt"):
+        old.unlink()
+
+    out_dir = proj / "out"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    final_path = out_dir / out_name
+
+    font = _font_path()
+
+    print(f"Rendering {len(timeline)} timeline item(s) at {rp.width}x{rp.height}@{rp.fps}fps")
+    intermediates: list[Path] = []
+    for idx, item in enumerate(timeline, start=1):
+        seg_out = tmp_dir / f"seg_{idx:03d}.mp4"
+        kind = item.get("type", "clip")
+        if kind == "clip":
+            _render_clip(proj, item, clips_by_id, voice_by_id, rp, seg_out)
+        elif kind == "slide":
+            _render_slide(proj, item, voice_by_id, rp, tmp_dir, idx, font, seg_out)
+        elif kind == "gap":
+            _render_gap(item, rp, seg_out)
+        else:
+            raise SystemExit(f"timeline item {idx}: unknown type {kind!r}")
+        intermediates.append(seg_out)
+        print(f"  [{idx:03d}] {kind:5} -> {seg_out.name}")
+
+    concat_list = tmp_dir / "concat.txt"
+    concat_list.write_text(
+        "".join(f"file '{p.as_posix()}'\n" for p in intermediates),
+        encoding="utf-8",
+    )
+
+    bg = plan.get("background_music")
+    if bg:
+        intermediate_concat = tmp_dir / "concat.mp4"
+        ffmpeg_wrap.run_ffmpeg(
+            [
+                "-f", "concat", "-safe", "0",
+                "-i", str(concat_list),
+                "-c", "copy",
+                str(intermediate_concat),
+            ]
+        )
+        _mix_background_music(intermediate_concat, proj, bg, rp, final_path)
+    else:
+        ffmpeg_wrap.run_ffmpeg(
+            [
+                "-f", "concat", "-safe", "0",
+                "-i", str(concat_list),
+                "-c", "copy",
+                str(final_path),
+            ]
+        )
+
+    info = ffmpeg_wrap.probe(final_path)
+    print(f"\nRendered: {final_path}")
+    print(f"  duration: {info.duration_sec:.2f}s, {info.width}x{info.height}@{info.fps:.0f}fps")
+    return 0
+
+
+def _render_clip(
+    proj: Path,
+    item: dict,
+    clips_by_id: dict[str, dict],
+    voice_by_id: dict[str, dict],
+    rp: RenderParams,
+    out_path: Path,
+) -> None:
+    cid = item.get("clip")
+    if not cid or cid not in clips_by_id:
+        raise SystemExit(
+            f"timeline clip refers to unknown id {cid!r}. Run `cut` first or check cut-plan.json."
+        )
+    clip = clips_by_id[cid]
+    clip_path = proj / clip["path"]
+    clip_dur = float(clip["duration_sec"])
+
+    vo_id = item.get("voiceover")
+    pad_to_vo = bool(item.get("pad_to_voiceover", True))
+    mute_src = bool(item.get("mute_source", False))
+    duck_db = item.get("duck_source_db", -15 if vo_id else 0)
+
+    if vo_id and vo_id not in voice_by_id:
+        raise SystemExit(
+            f"timeline clip '{cid}' references voiceover '{vo_id}' which is not in "
+            f"voice/manifest.json. Run `tts` first."
+        )
+
+    args: list[str] = []
+    filter_complex_parts: list[str] = []
+
+    args += ["-i", str(clip_path)]
+    if vo_id:
+        vo = voice_by_id[vo_id]
+        args += ["-i", str(proj / vo["path"])]
+        vo_dur = float(vo["duration_sec"])
+        target_dur = max(clip_dur, vo_dur) if pad_to_vo else clip_dur
+        extra_pad = max(0.0, target_dur - clip_dur)
+
+        if extra_pad > 0.01:
+            filter_complex_parts.append(
+                f"[0:v]tpad=stop_mode=clone:stop_duration={extra_pad:.3f},{_scale_pad(rp)}[vout]"
+            )
+        else:
+            filter_complex_parts.append(f"[0:v]{_scale_pad(rp)}[vout]")
+
+        # Duck (or mute) the source audio; if source had no audio, anullsrc fallback.
+        src_vol_expr = "volume=0" if mute_src else f"volume={duck_db}dB"
+        filter_complex_parts.append(
+            f"[0:a]aresample={rp.sr},aformat=channel_layouts=stereo,"
+            f"{src_vol_expr},apad=whole_dur={target_dur:.3f}[a0]"
+        )
+        filter_complex_parts.append(
+            f"[1:a]aresample={rp.sr},aformat=channel_layouts=stereo,"
+            f"apad=whole_dur={target_dur:.3f}[a1]"
+        )
+        filter_complex_parts.append(
+            f"[a0][a1]amix=inputs=2:duration=longest:normalize=0,"
+            f"atrim=duration={target_dur:.3f}[aout]"
+        )
+        args += ["-filter_complex", ";".join(filter_complex_parts)]
+        args += ["-map", "[vout]", "-map", "[aout]"]
+        args += ["-t", f"{target_dur:.3f}"]
+    else:
+        filter_complex_parts.append(f"[0:v]{_scale_pad(rp)}[vout]")
+        src_vol_expr = "volume=0" if mute_src else None
+        if src_vol_expr:
+            filter_complex_parts.append(
+                f"[0:a]aresample={rp.sr},aformat=channel_layouts=stereo,{src_vol_expr}[aout]"
+            )
+        else:
+            filter_complex_parts.append(
+                f"[0:a]aresample={rp.sr},aformat=channel_layouts=stereo[aout]"
+            )
+        args += ["-filter_complex", ";".join(filter_complex_parts)]
+        args += ["-map", "[vout]", "-map", "[aout]"]
+
+    args += rp.video_encode_args() + rp.audio_encode_args()
+    args += [str(out_path)]
+    ffmpeg_wrap.run_ffmpeg(args)
+
+
+def _render_slide(
+    proj: Path,
+    item: dict,
+    voice_by_id: dict[str, dict],
+    rp: RenderParams,
+    tmp_dir: Path,
+    idx: int,
+    font: str,
+    out_path: Path,
+) -> None:
+    vo_id = item.get("voiceover")
+    duration = item.get("duration_sec")
+    bg_image = item.get("background_image")
+    bg_color = item.get("background_color", "#000000")
+
+    if vo_id:
+        if vo_id not in voice_by_id:
+            raise SystemExit(
+                f"slide references voiceover '{vo_id}' not in voice/manifest.json. Run `tts` first."
+            )
+        vo_dur = float(voice_by_id[vo_id]["duration_sec"])
+        pad_after = float(item.get("pad_after_sec", 0.3))
+        total = vo_dur + pad_after
+    elif duration is not None:
+        total = float(duration)
+    else:
+        raise SystemExit(
+            f"slide must have either `voiceover` or `duration_sec`. Item: {item}"
+        )
+
+    args: list[str] = []
+    vf_chain: list[str] = []
+
+    if bg_image:
+        bg_path = (proj / bg_image).resolve()
+        if not bg_path.exists():
+            raise SystemExit(f"slide background_image not found: {bg_path}")
+        args += ["-loop", "1", "-i", str(bg_path)]
+        vf_chain.append(_scale_pad(rp))
+    else:
+        color_arg = _color_to_ffmpeg(bg_color)
+        args += [
+            "-f", "lavfi",
+            "-i", f"color=c={color_arg}:s={rp.width}x{rp.height}:r={rp.fps}",
+        ]
+        # color source is already correct size/fps; still ensure pixel format.
+        vf_chain.append(f"format=yuv420p,setsar=1,fps={rp.fps}")
+
+    text_filters = _build_drawtext_filters(item, rp, tmp_dir, idx, font)
+    if text_filters:
+        vf_chain.extend(text_filters)
+
+    if vo_id:
+        args += ["-i", str(proj / voice_by_id[vo_id]["path"])]
+    else:
+        args += ["-f", "lavfi", "-i", f"anullsrc=r={rp.sr}:cl=stereo"]
+
+    filter_complex = (
+        f"[0:v]{','.join(vf_chain)},trim=duration={total:.3f},setpts=PTS-STARTPTS[vout];"
+        f"[1:a]aresample={rp.sr},aformat=channel_layouts=stereo,"
+        f"apad=whole_dur={total:.3f},atrim=duration={total:.3f},asetpts=PTS-STARTPTS[aout]"
+    )
+    args += ["-filter_complex", filter_complex]
+    args += ["-map", "[vout]", "-map", "[aout]"]
+    args += ["-t", f"{total:.3f}"]
+    args += rp.video_encode_args() + rp.audio_encode_args()
+    args += [str(out_path)]
+    ffmpeg_wrap.run_ffmpeg(args)
+
+
+def _render_gap(item: dict, rp: RenderParams, out_path: Path) -> None:
+    duration = float(item.get("duration_sec", 0))
+    if duration <= 0:
+        raise SystemExit("gap requires positive duration_sec")
+    args = [
+        "-f", "lavfi", "-i", f"color=c=0x000000:s={rp.width}x{rp.height}:r={rp.fps}",
+        "-f", "lavfi", "-i", f"anullsrc=r={rp.sr}:cl=stereo",
+        "-t", f"{duration:.3f}",
+        "-pix_fmt", "yuv420p",
+    ]
+    args += rp.video_encode_args() + rp.audio_encode_args() + [str(out_path)]
+    ffmpeg_wrap.run_ffmpeg(args)
+
+
+def _mix_background_music(
+    concat_video: Path, proj: Path, bg: dict, rp: RenderParams, final_path: Path
+) -> None:
+    music_rel = bg.get("path")
+    if not music_rel:
+        raise SystemExit("background_music.path is required")
+    music_path = (proj / music_rel).resolve()
+    if not music_path.exists():
+        raise SystemExit(f"background_music.path not found: {music_path}")
+
+    volume_db = float(bg.get("volume_db", -22))
+    fade_in = float(bg.get("fade_in_sec", 1.0))
+    fade_out = float(bg.get("fade_out_sec", 2.0))
+
+    info = ffmpeg_wrap.probe(concat_video)
+    total = info.duration_sec
+    fade_out_start = max(0.0, total - fade_out)
+
+    filter_complex = (
+        f"[1:a]aresample={rp.sr},aformat=channel_layouts=stereo,"
+        f"volume={volume_db}dB,"
+        f"afade=t=in:st=0:d={fade_in:.3f},"
+        f"afade=t=out:st={fade_out_start:.3f}:d={fade_out:.3f}[bg];"
+        f"[0:a][bg]amix=inputs=2:duration=first:normalize=0[aout]"
+    )
+    args = [
+        "-i", str(concat_video),
+        "-stream_loop", "-1", "-i", str(music_path),
+        "-filter_complex", filter_complex,
+        "-map", "0:v", "-map", "[aout]",
+        "-c:v", "copy",
+    ]
+    args += rp.audio_encode_args() + [str(final_path)]
+    ffmpeg_wrap.run_ffmpeg(args)
