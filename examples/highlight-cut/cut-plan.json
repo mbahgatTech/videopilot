@@ -1,0 +1,25 @@
+{
+  "clips": [
+    {
+      "id": "c-hook",
+      "source": "raw1",
+      "start": 12.3,
+      "end": 28.5,
+      "label": "the opening hook"
+    },
+    {
+      "id": "c-key-insight",
+      "source": "raw1",
+      "start": 145.2,
+      "end": 167.0,
+      "label": "the key insight about onboarding"
+    },
+    {
+      "id": "c-demo",
+      "source": "raw1",
+      "start": 312.0,
+      "end": 348.5,
+      "label": "the live demo"
+    }
+  ]
+}

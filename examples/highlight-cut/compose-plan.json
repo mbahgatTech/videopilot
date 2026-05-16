@@ -1,0 +1,12 @@
+{
+  "output": {
+    "filename": "highlights.mp4",
+    "resolution": "1920x1080",
+    "fps": 30
+  },
+  "timeline": [
+    { "type": "clip", "clip": "c-hook" },
+    { "type": "clip", "clip": "c-key-insight" },
+    { "type": "clip", "clip": "c-demo" }
+  ]
+}
