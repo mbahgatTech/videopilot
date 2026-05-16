@@ -1,0 +1,10 @@
+include AGENT.md
+include LICENSE
+include README.md
+recursive-include examples *.json
+recursive-include examples *.md
+graft projects
+prune projects/*
+include projects/.gitkeep
+global-exclude __pycache__
+global-exclude *.py[cod]
