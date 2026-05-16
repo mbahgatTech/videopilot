@@ -37,12 +37,12 @@ export default function CopyButton({ value, className, label = "Copy" }: Props) 
       {copied ? (
         <>
           <Check className="h-3.5 w-3.5 text-cyan" />
-          <span>Copied</span>
+          <span className="hidden sm:inline">Copied</span>
         </>
       ) : (
         <>
           <Copy className="h-3.5 w-3.5" />
-          <span>{label}</span>
+          <span className="hidden sm:inline">{label}</span>
         </>
       )}
     </button>

@@ -119,11 +119,11 @@ function MobileFlow({ reduced }: { reduced: boolean }) {
           <div className="relative z-10 flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-border bg-surface-2 text-violet">
             <s.icon className="h-5 w-5" />
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="text-sm font-semibold text-foreground">
               {i + 1}. {s.label}
             </div>
-            <div className="mt-0.5 font-mono text-xs text-muted">{s.state}</div>
+            <div className="mt-0.5 break-words font-mono text-xs text-muted">{s.state}</div>
           </div>
         </motion.li>
       ))}

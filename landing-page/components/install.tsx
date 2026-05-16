@@ -80,7 +80,7 @@ export default function Install() {
                     id={`tab-${t.key}`}
                     onClick={() => setTab(t.key)}
                     className={cn(
-                      "relative inline-flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors",
+                      "relative inline-flex items-center gap-2 px-3 py-2.5 text-xs font-medium transition-colors sm:px-4 sm:py-3 sm:text-sm",
                       active
                         ? "text-foreground"
                         : "text-muted hover:text-foreground",
@@ -104,14 +104,14 @@ export default function Install() {
               role="tabpanel"
               aria-labelledby="tab-pypi"
               hidden={tab !== "pypi"}
-              className="p-5"
+              className="p-4 sm:p-5"
             >
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-border bg-background/70 px-4 py-3">
-                <div className="flex min-w-0 items-center gap-3 font-mono text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background/70 px-3 py-3 sm:px-4">
+                <div className="flex min-w-0 flex-1 items-center gap-2 font-mono text-[12px] sm:gap-3 sm:text-sm">
                   <span className="select-none text-violet">$</span>
-                  <span className="truncate text-foreground">{PYPI_CMD}</span>
+                  <span className="min-w-0 break-words text-foreground">{PYPI_CMD}</span>
                 </div>
-                <CopyButton value={PYPI_CMD} />
+                <CopyButton value={PYPI_CMD} className="shrink-0" />
               </div>
               <p className="mt-4 text-xs text-muted">
                 Installs the <code className="font-mono">videopilot</code> CLI
@@ -126,16 +126,16 @@ export default function Install() {
               role="tabpanel"
               aria-labelledby="tab-uvx"
               hidden={tab !== "uvx"}
-              className="p-5"
+              className="p-4 sm:p-5"
             >
               <div className="rounded-xl border border-border bg-background/70">
-                <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-                  <span className="font-mono text-[11px] text-muted-2">
+                <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5 sm:px-4">
+                  <span className="min-w-0 truncate font-mono text-[10.5px] text-muted-2 sm:text-[11px]">
                     ~/.copilot/mcp-config.json
                   </span>
-                  <CopyButton value={UVX_CONFIG} />
+                  <CopyButton value={UVX_CONFIG} className="shrink-0" />
                 </div>
-                <pre className="overflow-x-auto px-4 py-3 font-mono text-[12.5px] leading-relaxed text-foreground">
+                <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 py-3 font-mono text-[11.5px] leading-relaxed text-foreground sm:whitespace-pre sm:px-4 sm:text-[12.5px]">
                   <code>{UVX_CONFIG}</code>
                 </pre>
               </div>
