@@ -207,6 +207,42 @@ python -m twine check dist/*
 videopilot doctor
 ```
 
+## Releasing
+
+Releases are published to PyPI automatically when a `v*` tag is pushed.
+The workflow uses [PyPI **Trusted Publishing** (OIDC)](https://docs.pypi.org/trusted-publishers/),
+so **no API tokens are stored in the repo or in GitHub Secrets** — PyPI verifies
+the GitHub OIDC token at publish time.
+
+One-time setup (PyPI side, do this once before the first release):
+
+1. Sign in to <https://pypi.org/>.
+2. Account settings → Publishing → **Add a new pending publisher**:
+   - PyPI project name: `videopilot`
+   - Owner: `mbahgatTech`
+   - Repository: `videopilot`
+   - Workflow filename: `release.yml`
+   - Environment name: `pypi`
+3. On GitHub, repo Settings → Environments → **New environment** → `pypi`.
+   Optionally add a required reviewer for an extra approval gate.
+
+Cutting a release:
+
+```
+# bump pyproject.toml [project] version, e.g. 0.1.0 -> 0.2.0
+git commit -am "release: 0.2.0"
+git tag v0.2.0
+git push origin main --tags
+```
+
+The `release` workflow then:
+
+1. Builds sdist + wheel
+2. Verifies tag matches `pyproject.toml` version
+3. Runs `twine check`
+4. Publishes to PyPI via OIDC
+5. Creates a GitHub Release with the sdist + wheel attached
+
 ## License
 
 MIT. See [`LICENSE`](LICENSE).
