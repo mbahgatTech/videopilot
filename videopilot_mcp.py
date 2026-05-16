@@ -10,20 +10,26 @@ Launch (after `pip install videopilot` or via `uvx`):
 
 The companion plugin's `.mcp.json` registers this command for the agent host.
 
-Tools mirror the CLI subcommands. Two extra tools -- `read_state` and
-`write_state` -- let the agent inspect and update the per-project JSON state
-files (`script.json`, `cut-plan.json`, `compose-plan.json`).
+Tools mirror the CLI subcommands. Long-running tools (`tts`, `transcribe`,
+`compose`, `cut`, `silence`) run on a worker thread so they neither block the
+FastMCP request loop nor crash on nested `asyncio.run()` calls inside lib
+modules, and they stream `Context.report_progress` heartbeats so MCP clients
+don't time out (-32001). Helper tools (`read_state`, `write_state`) let the
+agent author the per-project JSON state files.
 """
 
 from __future__ import annotations
 
+import asyncio
+import inspect
 import io
 import json
 import os
 import sys
+import threading
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 HERE = Path(__file__).resolve().parent
 if str(HERE) not in sys.path:
@@ -42,7 +48,7 @@ from lib import (  # noqa: E402  (must happen after sys.path tweak)
 )
 
 try:
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp import Context, FastMCP
 except ImportError:
     sys.stderr.write(
         "videopilot-mcp requires the 'mcp' Python package.\n"
@@ -88,8 +94,8 @@ def _read_json(path: Path) -> Any:
         return {"__parse_error__": str(e)}
 
 
-def _capture(fn, *args, **kwargs) -> tuple[int, str]:
-    """Run a lib `.run()` function while capturing stdout+stderr."""
+def _capture(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> tuple[int, str]:
+    """Run a sync lib `.run()` function while capturing stdout+stderr."""
     buf = io.StringIO()
     with redirect_stdout(buf), redirect_stderr(buf):
         try:
@@ -97,6 +103,76 @@ def _capture(fn, *args, **kwargs) -> tuple[int, str]:
         except SystemExit as e:
             rc = int(e.code or 0)
     return int(rc or 0), buf.getvalue()
+
+
+async def _run_threaded(
+    fn: Callable[..., Any],
+    *args: Any,
+    ctx: Optional[Context] = None,
+    **kwargs: Any,
+) -> tuple[int, str]:
+    """Run a sync lib `.run()` on a worker thread, bridging its `progress`
+    callback to `ctx.report_progress` so MCP clients keep the request alive.
+
+    The helper inspects ``fn``'s signature: if it accepts ``progress``, a
+    thread-safe callback is injected. Otherwise the call is forwarded as-is.
+    Stdout + stderr are captured and returned alongside the exit code.
+    """
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[tuple[Any, ...]] = asyncio.Queue()
+
+    def thread_progress(current: int, total: int, message: str = "") -> None:
+        loop.call_soon_threadsafe(
+            queue.put_nowait, ("progress", current, total, message)
+        )
+
+    sig = inspect.signature(fn)
+    accepts_progress = "progress" in sig.parameters
+
+    def worker() -> None:
+        buf = io.StringIO()
+        rc = 0
+        try:
+            with redirect_stdout(buf), redirect_stderr(buf):
+                call_kwargs = dict(kwargs)
+                if accepts_progress:
+                    call_kwargs["progress"] = thread_progress
+                rc = fn(*args, **call_kwargs) or 0
+        except SystemExit as e:
+            rc = int(e.code or 0)
+        except BaseException as e:  # noqa: BLE001
+            loop.call_soon_threadsafe(
+                queue.put_nowait, ("error", e, buf.getvalue())
+            )
+            return
+        loop.call_soon_threadsafe(
+            queue.put_nowait, ("done", int(rc), buf.getvalue())
+        )
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    while True:
+        evt = await queue.get()
+        kind = evt[0]
+        if kind == "progress":
+            _, cur, total, msg = evt
+            if ctx is not None:
+                try:
+                    await ctx.report_progress(
+                        progress=float(cur),
+                        total=float(total) if total else None,
+                        message=msg or None,
+                    )
+                except Exception:  # noqa: BLE001 -- never let a flaky client kill a render
+                    pass
+        elif kind == "done":
+            _, rc, log = evt
+            return int(rc), log
+        elif kind == "error":
+            _, exc, log = evt
+            # Surface captured output before re-raising so the agent has context.
+            sys.stderr.write(log)
+            raise exc
 
 
 def _status(slug: str, project_root: Optional[str]) -> dict:
@@ -282,12 +358,18 @@ def write_state(
     return {"written": True, "path": str(path)}
 
 
+# ---------------------------------------------------------------------------
+# Long-running tools (threaded + progress-streaming)
+# ---------------------------------------------------------------------------
+
+
 @mcp.tool()
-def tts(
+async def tts(
     slug: str,
     only: Optional[list[str]] = None,
     force: bool = False,
     project_root: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> dict:
     """Synthesise voiceover MP3s from script.json.
 
@@ -297,18 +379,26 @@ def tts(
         force: Regenerate even if output already exists.
     """
     root = _projects_root(project_root)
-    rc, log = _capture(tts_mod.run, root, slug, only=only or [], force=force)
+    rc, log = await _run_threaded(
+        tts_mod.run,
+        root,
+        slug,
+        only=only or [],
+        force=force,
+        ctx=ctx,
+    )
     manifest = _read_json(_project_dir(root, slug) / "voice" / "manifest.json")
     return {"exit_code": rc, "log": log, "voice_manifest": manifest}
 
 
 @mcp.tool()
-def transcribe(
+async def transcribe(
     slug: str,
     source_id: str,
     model: str = "base",
     language: Optional[str] = None,
     project_root: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> dict:
     """Transcribe a source with faster-whisper. Emits word-level transcript
     JSON + SRT into transcripts/.
@@ -320,8 +410,14 @@ def transcribe(
         language: ISO code, e.g. "en". Auto-detect if omitted.
     """
     root = _projects_root(project_root)
-    rc, log = _capture(
-        transcribe_mod.run, root, slug, source_id, model=model, language=language
+    rc, log = await _run_threaded(
+        transcribe_mod.run,
+        root,
+        slug,
+        source_id,
+        model=model,
+        language=language,
+        ctx=ctx,
     )
     tx_path = _project_dir(root, slug) / "transcripts" / f"{source_id}.json"
     return {
@@ -333,18 +429,19 @@ def transcribe(
 
 
 @mcp.tool()
-def silence(
+async def silence(
     slug: str,
     source_id: str,
     threshold_db: float = -35.0,
     min_silence_sec: float = 1.0,
     output: Optional[str] = None,
     project_root: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> dict:
     """Run ffmpeg silencedetect on a source and emit a cut-plan candidate
     that keeps only the non-silent spans."""
     root = _projects_root(project_root)
-    rc, log = _capture(
+    rc, log = await _run_threaded(
         silence_mod.run,
         root,
         slug,
@@ -352,6 +449,7 @@ def silence(
         threshold_db=threshold_db,
         min_silence_sec=min_silence_sec,
         output=output,
+        ctx=ctx,
     )
     cand_path = (
         Path(output) if output else _project_dir(root, slug) / "cut-plan.candidate.json"
@@ -365,12 +463,13 @@ def silence(
 
 
 @mcp.tool()
-def cut(
+async def cut(
     slug: str,
     only: Optional[list[str]] = None,
     force: bool = False,
     stream_copy: bool = False,
     project_root: Optional[str] = None,
+    ctx: Optional[Context] = None,
 ) -> dict:
     """Cut clips per cut-plan.json.
 
@@ -381,18 +480,28 @@ def cut(
         stream_copy: Skip re-encoding (fast, but cuts snap to keyframes).
     """
     root = _projects_root(project_root)
-    rc, log = _capture(
-        cut_mod.run, root, slug, only=only or [], force=force, stream_copy=stream_copy
+    rc, log = await _run_threaded(
+        cut_mod.run,
+        root,
+        slug,
+        only=only or [],
+        force=force,
+        stream_copy=stream_copy,
+        ctx=ctx,
     )
     manifest = _read_json(_project_dir(root, slug) / "clips" / "manifest.json")
     return {"exit_code": rc, "log": log, "clips_manifest": manifest}
 
 
 @mcp.tool()
-def compose(slug: str, project_root: Optional[str] = None) -> dict:
+async def compose(
+    slug: str,
+    project_root: Optional[str] = None,
+    ctx: Optional[Context] = None,
+) -> dict:
     """Render final video per compose-plan.json. May take minutes for long videos."""
     root = _projects_root(project_root)
-    rc, log = _capture(compose_mod.run, root, slug)
+    rc, log = await _run_threaded(compose_mod.run, root, slug, ctx=ctx)
     final = _project_dir(root, slug) / "out" / "final.mp4"
     return {
         "exit_code": rc,

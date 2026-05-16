@@ -12,9 +12,11 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from . import ffmpeg_wrap
+
+ProgressCb = Callable[[int, int, str], None]
 
 # Canonical fallback render parameters when compose-plan.json omits them.
 _DEFAULT_RES = (1920, 1080)
@@ -162,7 +164,12 @@ def _build_drawtext_filters(
     return filters
 
 
-def run(root: Path, slug: str) -> int:
+def run(
+    root: Path,
+    slug: str,
+    *,
+    progress: ProgressCb | None = None,
+) -> int:
     proj = root / slug
     plan_path = proj / "compose-plan.json"
     if not plan_path.exists():
@@ -200,9 +207,12 @@ def run(root: Path, slug: str) -> int:
 
     print(f"Rendering {len(timeline)} timeline item(s) at {rp.width}x{rp.height}@{rp.fps}fps")
     intermediates: list[Path] = []
+    total_segs = len(timeline)
     for idx, item in enumerate(timeline, start=1):
         seg_out = tmp_dir / f"seg_{idx:03d}.mp4"
         kind = item.get("type", "clip")
+        if progress is not None:
+            progress(idx, total_segs, f"segment {idx}/{total_segs} ({kind})")
         if kind == "clip":
             _render_clip(proj, item, clips_by_id, voice_by_id, rp, seg_out)
         elif kind == "slide":
@@ -213,6 +223,9 @@ def run(root: Path, slug: str) -> int:
             raise SystemExit(f"timeline item {idx}: unknown type {kind!r}")
         intermediates.append(seg_out)
         print(f"  [{idx:03d}] {kind:5} -> {seg_out.name}")
+
+    if progress is not None:
+        progress(total_segs, total_segs, "concat")
 
     concat_list = tmp_dir / "concat.txt"
     concat_list.write_text(
