@@ -157,6 +157,22 @@ def _scale_pad(rp: RenderParams) -> str:
     )
 
 
+# zoompan crops on integer pixel boundaries each output frame. When the
+# source is at the same resolution as the output, a slow zoom/pan steps the
+# crop window by ~1px per frame, which reads as visible shake. Feeding
+# zoompan a Lanczos-upscaled source pushes those integer steps to a
+# fraction of an output pixel, so the motion smooths out. 4x oversample
+# (7680x4320 for 1080p out) keeps jitter under 0.25 output pixels for
+# anything up to ~1.25x zoom range, which covers our defaults comfortably.
+def _scale_pad_oversampled(rp: RenderParams, factor: int = 8) -> str:
+    w, h = rp.width * factor, rp.height * factor
+    return (
+        f"scale={w}:{h}:force_original_aspect_ratio=decrease:flags=lanczos,"
+        f"pad={w}:{h}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        f"setsar=1,fps={rp.fps},format=yuv420p"
+    )
+
+
 def _validate_zoom(value: float, field: str) -> float:
     """Reject zoom factors outside zoompan's documented [1, 10] range."""
     if not math.isfinite(value):
@@ -564,7 +580,10 @@ def _render_slide(
         if not bg_path.exists():
             raise SystemExit(f"slide background_image not found: {bg_path}")
         args += ["-loop", "1", "-i", str(bg_path)]
-        vf_chain.append(_scale_pad(rp))
+        if item.get("motion") is not None:
+            vf_chain.append(_scale_pad_oversampled(rp))
+        else:
+            vf_chain.append(_scale_pad(rp))
     else:
         color_arg = _color_to_ffmpeg(bg_color)
         args += [

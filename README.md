@@ -35,6 +35,7 @@ source.mp4  ->  script.json  ->  tts  ->  cut-plan.json  ->  cut  ->  compose-pl
 | Word-level transcription | [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (local) |
 | Silence trimming, scene cuts | ffmpeg |
 | Title slides, picture-in-picture, audio ducking, music underlay | ffmpeg filter graph composer |
+| Ken Burns motion on still images (zoom in/out, pan) | ffmpeg `zoompan` over a Lanczos-oversampled source (subpixel-smooth) |
 | MP4 render at any resolution / fps | ffmpeg |
 | Hand-off to Premiere / Resolve / Final Cut | EDL (CMX 3600) + FCPXML export |
 | Replayable render scripts | PowerShell / bash export |

@@ -262,6 +262,19 @@ Timeline item types:
   `"• "`, or `"-  "` are passed through verbatim; any other line is
   auto-prefixed with `"•  "` so plain strings render as bullets.
 - `voiceover` (optional): id from `script.json`
+- `motion` (optional, object): Ken Burns motion applied to `background_image`.
+  No-op on solid `background_color` (raises). Shape:
+  - `{ "type": "zoom_in",  "from": 1.0,  "to": 1.18, "anchor": "center" }`
+  - `{ "type": "zoom_out", "from": 1.18, "to": 1.0,  "anchor": "center" }`
+  - `{ "type": "pan", "direction": "left"|"right"|"up"|"down", "zoom": 1.18 }`
+
+  `from`/`to`/`zoom` are between 1.0 and 10.0 (zoompan's documented range).
+  Anchors: `center` (default), `top_left`, `top_right`, `bottom_left`,
+  `bottom_right`. Pan `direction` follows cinematography convention:
+  `"left"` = camera moves left, so content appears to move right. The
+  engine internally upscales the source 8× with Lanczos before zoompan so
+  the motion is subpixel-smooth — you don't need to provide a pre-sized
+  image, any resolution works.
 
 Example slide with body bullets:
 
