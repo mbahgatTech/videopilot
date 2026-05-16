@@ -1,0 +1,59 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: build (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install build tooling
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+
+      - name: Build sdist + wheel
+        run: python -m build
+
+      - name: twine check
+        run: python -m twine check dist/*
+
+      - name: Install wheel
+        run: |
+          WHEEL=$(ls dist/*.whl | head -n1)
+          python -m pip install "$WHEEL"
+
+      - name: Import smoke test
+        run: |
+          python -c "import videopilot_cli, videopilot_mcp, lib; print('imports ok')"
+
+      - name: CLI smoke (--help)
+        run: videopilot --help
+
+      - name: MCP smoke (--version)
+        run: videopilot-mcp --version
+
+      - name: Upload artifacts
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/*
+          if-no-files-found: error
