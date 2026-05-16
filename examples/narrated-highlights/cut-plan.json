@@ -1,0 +1,7 @@
+{
+  "clips": [
+    { "id": "c-hook", "source": "raw1", "start": 12.3, "end": 28.5, "label": "opening hook" },
+    { "id": "c-insight", "source": "raw1", "start": 145.2, "end": 167.0, "label": "key insight moment" },
+    { "id": "c-demo", "source": "raw1", "start": 312.0, "end": 348.5, "label": "live demo" }
+  ]
+}

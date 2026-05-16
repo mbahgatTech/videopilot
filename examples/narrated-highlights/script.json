@@ -1,0 +1,26 @@
+{
+  "voice_defaults": {
+    "voice": "en-US-AndrewMultilingualNeural",
+    "engine": "edge-tts"
+  },
+  "segments": [
+    {
+      "id": "vo-title",
+      "text": "Q4 product review. May 2026.",
+      "voice": "en-US-AvaMultilingualNeural",
+      "pause_after_ms": 300
+    },
+    {
+      "id": "vo-context",
+      "text": "Here's what the team showed at the demo day, in under sixty seconds."
+    },
+    {
+      "id": "vo-insight",
+      "text": "The key insight was this: onboarding completion doubled when we cut the second confirmation step."
+    },
+    {
+      "id": "vo-outro",
+      "text": "Full recording is in the team channel. See you next quarter."
+    }
+  ]
+}

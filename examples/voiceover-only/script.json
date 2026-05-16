@@ -1,0 +1,27 @@
+{
+  "voice_defaults": {
+    "voice": "en-US-AndrewMultilingualNeural",
+    "rate": "+0%",
+    "pitch": "+0Hz",
+    "engine": "edge-tts"
+  },
+  "segments": [
+    {
+      "id": "vo-intro",
+      "text": "Welcome to the demo. This 30 second clip was assembled by videopilot from a single script.",
+      "voice": "en-US-AvaMultilingualNeural",
+      "rate": "+0%",
+      "pause_after_ms": 400
+    },
+    {
+      "id": "vo-body",
+      "text": "Each slide and voiceover line lives in a JSON file, so you can edit, regenerate, and re-render at will."
+    },
+    {
+      "id": "vo-closer",
+      "text": "That's it. Thanks for watching.",
+      "rate": "-5%",
+      "pause_after_ms": 200
+    }
+  ]
+}

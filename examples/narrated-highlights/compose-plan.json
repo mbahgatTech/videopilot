@@ -1,0 +1,50 @@
+{
+  "output": {
+    "filename": "narrated.mp4",
+    "resolution": "1920x1080",
+    "fps": 30,
+    "video_bitrate": "10M",
+    "audio_bitrate": "192k"
+  },
+  "timeline": [
+    {
+      "type": "slide",
+      "background_color": "#0b132b",
+      "title": "Q4 product review",
+      "subtitle": "May 2026",
+      "voiceover": "vo-title",
+      "pad_after_sec": 0.4
+    },
+    {
+      "type": "clip",
+      "clip": "c-hook",
+      "voiceover": "vo-context",
+      "duck_source_db": -18,
+      "pad_to_voiceover": true
+    },
+    {
+      "type": "clip",
+      "clip": "c-insight",
+      "voiceover": "vo-insight",
+      "duck_source_db": -20,
+      "pad_to_voiceover": true
+    },
+    {
+      "type": "clip",
+      "clip": "c-demo"
+    },
+    {
+      "type": "slide",
+      "background_color": "#1c2541",
+      "title": "Thanks",
+      "voiceover": "vo-outro",
+      "pad_after_sec": 0.6
+    }
+  ],
+  "background_music": {
+    "path": "sources/music.mp3",
+    "volume_db": -24,
+    "fade_in_sec": 1.0,
+    "fade_out_sec": 2.5
+  }
+}

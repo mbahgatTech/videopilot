@@ -1,0 +1,35 @@
+{
+  "output": {
+    "filename": "final.mp4",
+    "resolution": "1920x1080",
+    "fps": 30,
+    "video_bitrate": "8M",
+    "audio_bitrate": "192k",
+    "video_codec": "libx264",
+    "audio_codec": "aac"
+  },
+  "timeline": [
+    {
+      "type": "slide",
+      "background_color": "#0b132b",
+      "title": "videopilot demo",
+      "subtitle": "voiceover-only example",
+      "voiceover": "vo-intro",
+      "pad_after_sec": 0.5
+    },
+    {
+      "type": "slide",
+      "background_color": "#1c2541",
+      "title": "Everything is JSON",
+      "voiceover": "vo-body",
+      "pad_after_sec": 0.5
+    },
+    {
+      "type": "slide",
+      "background_color": "#3a506b",
+      "title": "Thanks",
+      "voiceover": "vo-closer",
+      "pad_after_sec": 0.6
+    }
+  ]
+}
