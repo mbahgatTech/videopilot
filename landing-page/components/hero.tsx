@@ -89,9 +89,9 @@ export default function Hero() {
 
         <motion.div
           {...fade(0.28)}
-          className="mt-10 flex items-center justify-center"
+          className="mt-10 flex items-center justify-center px-2"
         >
-          <div className="inline-flex items-center gap-2 rounded-full border border-border bg-surface/70 px-2 py-1.5 backdrop-blur">
+          <div className="inline-flex max-w-full flex-wrap items-center justify-center gap-x-2 gap-y-1.5 rounded-2xl border border-border bg-surface/70 px-3 py-2 backdrop-blur sm:rounded-full sm:py-1.5">
             <span className="rounded-full bg-violet/15 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider text-violet">
               PyPI
             </span>
