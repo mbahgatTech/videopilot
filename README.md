@@ -1,27 +1,29 @@
 # videopilot
 
-> Agent-driven video creation toolkit. Neural TTS voiceover, AI highlight cutting,
-> timeline composition with slides and audio ducking, and NLE export — all driven
-> by a calling LLM through a JSON state contract.
+> Agent-driven video creation toolkit. An **MCP server** giving LLMs 20 tools
+> to author voiceover, cut highlights, compose timelines, and render finished
+> MP4s — plus a CLI for manual / scripted runs when you don't want an agent
+> in the loop.
 
 [![PyPI](https://img.shields.io/badge/PyPI-videopilot-blue.svg)](https://pypi.org/project/videopilot/)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![ffmpeg](https://img.shields.io/badge/depends-ffmpeg-orange.svg)](https://ffmpeg.org)
 
-`videopilot` is a Python CLI that turns raw screen recordings into narrated,
-edited MP4s. The CLI does the **mechanical work** — ffmpeg, neural TTS,
-faster-whisper transcription, timeline rendering. A calling **agent** (GitHub
-Copilot CLI, Claude Code, Continue.dev, or any code-aware LLM) does the
-**creative work** — writes the voiceover script, picks the highlight spans,
-lays out the timeline — by reading the contract in [`AGENT.md`](AGENT.md) and
-authoring small JSON state files.
+`videopilot` is an **MCP (Model Context Protocol) server** that lets a calling
+LLM — GitHub Copilot CLI, Claude Code, Cursor, Continue.dev, or any MCP-aware
+client — turn raw screen recordings into narrated, edited MP4s. The server
+exposes 20 tools covering the full pipeline: neural TTS voiceover,
+faster-whisper transcription, silence detection, clip cutting, timeline
+composition with slides and audio ducking, and NLE export to EDL / FCPXML.
 
-You can also drive `videopilot` by hand. Each subcommand is independently usable.
+The MCP server is the **primary interface**. A standalone `videopilot` CLI
+ships alongside it for manual or scripted runs — useful for one-off stages,
+CI, or workflows without an agent in the loop.
 
 ```
 source.mp4  ->  script.json  ->  tts  ->  cut-plan.json  ->  cut  ->  compose-plan.json  ->  compose  ->  final.mp4
-                                                                                                         + EDL / FCPXML / replay script
+                                                                                                          + EDL / FCPXML / replay script
 ```
 
 ## Highlights
@@ -36,8 +38,8 @@ source.mp4  ->  script.json  ->  tts  ->  cut-plan.json  ->  cut  ->  compose-pl
 | MP4 render at any resolution / fps | ffmpeg |
 | Hand-off to Premiere / Resolve / Final Cut | EDL (CMX 3600) + FCPXML export |
 | Replayable render scripts | PowerShell / bash export |
-| Agent-first design | JSON state-file contract documented in `AGENT.md` |
-| Incremental authoring from agents | Six convenience MCP tools for incremental authoring, schema introspection, preview rendering, and idempotency probing — see `AGENT.md` |
+| Agent integration | MCP server with 20 tools — see [MCP tools](#mcp-tools) |
+| Authoring contract | JSON state files documented in [`AGENT.md`](AGENT.md) (incremental authoring, schema introspection, idempotency probes) |
 
 ## Install
 
@@ -47,7 +49,14 @@ source.mp4  ->  script.json  ->  tts  ->  cut-plan.json  ->  cut  ->  compose-pl
 pip install --user videopilot
 ```
 
-`videopilot` is a console script — after install it's on your `PATH`. Verify:
+Two console scripts are installed:
+
+| Script | Purpose |
+|---|---|
+| `videopilot-mcp` | The MCP server (stdio transport). Wire this into your MCP client. |
+| `videopilot` | The manual CLI. Useful for one-off stages and CI. |
+
+Verify the install:
 
 ```
 videopilot doctor
@@ -65,6 +74,7 @@ You also need **ffmpeg** on `PATH`:
 
 `videopilot doctor` exits 0 when ffmpeg, ffprobe, Python deps, and optional
 Azure keys are all in order; otherwise it prints exactly what's missing.
+The same check is also exposed as the `doctor` MCP tool.
 
 ### From source (development)
 
@@ -84,7 +94,101 @@ marketplace, install the `videopilot` plugin and ask:
 
 The plugin's `init` skill runs the same installer logic for you.
 
-## Quick start
+## Connect to an MCP client
+
+`videopilot-mcp` runs the MCP server over stdio. Point any MCP-aware client
+at it.
+
+### GitHub Copilot CLI
+
+```
+gh copilot mcp add videopilot videopilot-mcp
+```
+
+Or hand-edit `~/.config/github-copilot/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "videopilot": { "command": "videopilot-mcp" }
+  }
+}
+```
+
+### Claude Desktop
+
+Config locations:
+
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Linux: `~/.config/Claude/claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "videopilot": { "command": "videopilot-mcp" }
+  }
+}
+```
+
+### Cursor / Continue.dev / generic MCP client
+
+Register a stdio MCP server with command `videopilot-mcp`. Refer to your
+client's MCP docs for the exact config-file location and schema.
+
+After your client restarts, the agent can call any of the 20 `videopilot.*`
+tools below.
+
+## MCP tools
+
+| Tool | Purpose |
+|---|---|
+| `doctor` | Verify ffmpeg, ffprobe, Python deps, optional Azure keys. |
+| `voices` | List available neural TTS voices (Edge TTS or Azure). |
+| `list_projects` | List all projects under `projects/`. |
+| `project_status` | Pipeline status for one project: which JSON state files exist, which stages have run. |
+| `init` | Create a new project, optionally with a first source video. |
+| `import_source` | Add another source to an existing project. |
+| `read_state` | Read a JSON state file (`project` / `script` / `cut-plan` / `compose-plan`). |
+| `write_state` | Write a JSON state file with schema validation. |
+| `tts` | Synthesize voiceover MP3s from `script.json` (async, emits progress notifications). |
+| `transcribe` | Run faster-whisper; returns word-level segments and writes SRT. |
+| `silence` | Emit a cut-plan candidate that strips silence. |
+| `cut` | Cut clips per `cut-plan.json`. |
+| `compose` | Render final MP4 per `compose-plan.json`. |
+| `export` | Emit NLE projects (EDL, FCPXML) and replayable ffmpeg script. |
+| `schema` | Return JSON schemas (agent-facing) for every state file. |
+| `add_vo_segment` | Append or upsert a voiceover segment in `script.json`. |
+| `add_slide` | Append a slide entry (with optional body text) to `compose-plan.json`. |
+| `set_compose_output` | Set compose output resolution / fps / codec. |
+| `preview_slide` | Render a single slide as a PNG for fast preview without running `compose`. |
+| `is_up_to_date` | Probe whether a stage's outputs are current for its inputs (idempotency check). |
+
+The contract — what each tool reads and writes, the JSON state-file schemas,
+and the recommended call order — is documented in [`AGENT.md`](AGENT.md).
+Calling agents should read `AGENT.md` before issuing tool calls.
+
+## CLI reference (manual mode)
+
+Each pipeline stage is also exposed as a `videopilot` CLI subcommand. Use it
+when you want to run a step by hand, drop the agent, or invoke from CI.
+
+| Command | Purpose |
+|---|---|
+| `videopilot doctor` | Verify ffmpeg, ffprobe, Python deps, optional Azure keys. |
+| `videopilot voices [--locale en-US]` | List available TTS voices. |
+| `videopilot init <slug> [--source PATH]` | Create a new project with optional first source. |
+| `videopilot import <slug> <path>` | Add another source to an existing project. |
+| `videopilot tts <slug> [--force]` | Synthesize voiceover MP3s from `script.json`. |
+| `videopilot transcribe <slug> <source-id>` | Run faster-whisper; emits word-level JSON + SRT. |
+| `videopilot silence <slug> <source-id>` | Emit a cut-plan candidate that strips silence. |
+| `videopilot cut <slug> [--force] [--reencode]` | Cut clips per `cut-plan.json`. |
+| `videopilot compose <slug>` | Render final MP4 per `compose-plan.json`. |
+| `videopilot export <slug> [--edl] [--fcpxml] [--script]` | Emit NLE projects + replayable ffmpeg script. |
+
+Run `videopilot <command> --help` for per-command flags.
+
+### Manual quick start
 
 ```
 # 1. Create a project with a source video
@@ -116,23 +220,6 @@ videopilot export demo --edl --fcpxml --script
 Final output: `projects/demo/out/final.mp4` plus optional `final.edl`,
 `final.fcpxml`, and `render.ps1`.
 
-## CLI reference
-
-| Command | Purpose |
-|---|---|
-| `videopilot doctor` | Verify ffmpeg, ffprobe, Python deps, optional Azure keys. |
-| `videopilot voices [--locale en-US]` | List available TTS voices. |
-| `videopilot init <slug> [--source PATH]` | Create a new project with optional first source. |
-| `videopilot import <slug> <path>` | Add another source to an existing project. |
-| `videopilot tts <slug> [--force]` | Synthesize voiceover MP3s from `script.json`. |
-| `videopilot transcribe <slug> <source-id>` | Run faster-whisper; emits word-level JSON + SRT. |
-| `videopilot silence <slug> <source-id>` | Emit a cut-plan candidate that strips silence. |
-| `videopilot cut <slug> [--force] [--reencode]` | Cut clips per `cut-plan.json`. |
-| `videopilot compose <slug>` | Render final MP4 per `compose-plan.json`. |
-| `videopilot export <slug> [--edl] [--fcpxml] [--script]` | Emit NLE projects + replayable ffmpeg script. |
-
-Run `videopilot <command> --help` for per-command flags.
-
 ## Project layout
 
 ```
@@ -141,9 +228,10 @@ videopilot/
 - README.md          <- this file
 - LICENSE            <- MIT
 - pyproject.toml
-- videopilot.py      <- argparse router
-- videopilot_cli.py  <- console-script shim
-- lib/               <- implementation modules
+- videopilot_mcp.py  <- MCP server (primary entry point; console-script: videopilot-mcp)
+- videopilot.py      <- argparse router (CLI implementation)
+- videopilot_cli.py  <- console-script shim for the CLI
+- lib/               <- shared implementation modules
   - tts.py
   - transcribe.py
   - silence.py
@@ -155,6 +243,7 @@ videopilot/
   - init_cmd.py
   - doctor.py
 - examples/          <- copyable starter JSON state files
+- tests/             <- standalone test scripts (mcp_e2e.py, progress_smoke.py)
 - projects/<slug>/   <- per-project workspace (one folder per video)
   - project.json
   - script.json
@@ -177,20 +266,6 @@ videopilot/
 
 Edge TTS is the default and requires no configuration.
 
-## Driving videopilot from an LLM
-
-Read [`AGENT.md`](AGENT.md). It is the contract the calling LLM uses:
-
-- the JSON schema for each state file (`project.json`, `script.json`,
-  `cut-plan.json`, `compose-plan.json`);
-- when to call which subcommand;
-- conventions (2-space JSON, preserved ids, idempotent re-runs);
-- common failure modes and recoveries.
-
-The `videopilot` plugin in the Agency Playground packages this contract as a
-Copilot/Claude skill so you can just say `set up videopilot` and `make a video
-from <source>` instead of orchestrating by hand.
-
 ## Development
 
 ```
@@ -206,16 +281,26 @@ python -m twine check dist/*
 
 # Local smoke test
 videopilot doctor
+
+# MCP server stdio + progress-notification smoke test
+python tests/progress_smoke.py
+
+# End-to-end MCP test (real ffmpeg + Edge TTS + full pipeline)
+python tests/mcp_e2e.py
 ```
 
 ## Releasing
 
-Releases are published to PyPI automatically when a `v*` tag is pushed.
-The workflow uses [PyPI **Trusted Publishing** (OIDC)](https://docs.pypi.org/trusted-publishers/),
-so **no API tokens are stored in the repo or in GitHub Secrets** — PyPI verifies
-the GitHub OIDC token at publish time.
+Releases publish to PyPI automatically when a `v*` tag is pushed. The
+version is derived from the tag itself via
+[setuptools_scm](https://setuptools-scm.readthedocs.io/) — there is no
+`version =` line in `pyproject.toml` and no version-bump commit is required.
 
-One-time setup (PyPI side, do this once before the first release):
+The workflow uses [PyPI **Trusted Publishing** (OIDC)](https://docs.pypi.org/trusted-publishers/),
+so **no API tokens are stored in the repo or in GitHub Secrets** — PyPI
+verifies the GitHub OIDC token at publish time.
+
+One-time setup (PyPI side, done once before the first release):
 
 1. Sign in to <https://pypi.org/>.
 2. Account settings → Publishing → **Add a new pending publisher**:
@@ -230,16 +315,14 @@ One-time setup (PyPI side, do this once before the first release):
 Cutting a release:
 
 ```
-# bump pyproject.toml [project] version, e.g. 0.1.0 -> 0.2.0
-git commit -am "release: 0.2.0"
 git tag v0.2.0
-git push origin main --tags
+git push origin v0.2.0
 ```
 
-The `release` workflow then:
+That's it. The `release` workflow then:
 
-1. Builds sdist + wheel
-2. Verifies tag matches `pyproject.toml` version
+1. Builds sdist + wheel (version derived from the tag)
+2. Verifies the tag matches the `setuptools_scm`-derived version
 3. Runs `twine check`
 4. Publishes to PyPI via OIDC
 5. Creates a GitHub Release with the sdist + wheel attached
