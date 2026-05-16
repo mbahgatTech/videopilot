@@ -193,6 +193,7 @@ def run(
     slug: str,
     *,
     progress: ProgressCb | None = None,
+    only_index: int | None = None,
 ) -> int:
     proj = root / slug
     plan_path = proj / "compose-plan.json"
@@ -202,6 +203,11 @@ def run(
     timeline = plan.get("timeline", []) or []
     if not timeline:
         raise SystemExit("compose-plan.json: timeline is empty.")
+
+    if only_index is not None and not (0 <= only_index < len(timeline)):
+        raise SystemExit(
+            f"only_index {only_index} out of range; timeline has {len(timeline)} item(s)"
+        )
 
     rp = RenderParams.from_output(plan.get("output", {}) or {})
     out_cfg = plan.get("output", {}) or {}
@@ -228,6 +234,26 @@ def run(
     final_path = out_dir / out_name
 
     font = _font_path()
+
+    # Single-segment preview: render only the requested item, skip concat & bg mix.
+    if only_index is not None:
+        item = timeline[only_index]
+        kind = item.get("type", "clip")
+        preview_path = out_dir / f"preview-{only_index:03d}.mp4"
+        if progress is not None:
+            progress(1, 1, f"segment 1/1 ({kind})")
+        if kind == "clip":
+            _render_clip(proj, item, clips_by_id, voice_by_id, rp, preview_path)
+        elif kind == "slide":
+            _render_slide(
+                proj, item, voice_by_id, rp, tmp_dir, only_index + 1, font, preview_path
+            )
+        elif kind == "gap":
+            _render_gap(item, rp, preview_path)
+        else:
+            raise SystemExit(f"timeline item {only_index + 1}: unknown type {kind!r}")
+        print(f"Rendered preview: {preview_path}")
+        return 0
 
     print(f"Rendering {len(timeline)} timeline item(s) at {rp.width}x{rp.height}@{rp.fps}fps")
     intermediates: list[Path] = []

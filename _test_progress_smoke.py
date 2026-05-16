@@ -1,4 +1,4 @@
-"""Smoke test for lib/ progress callbacks.
+"""Smoke test for lib/ progress callbacks, slide body field, and only_index preview.
 
 Run from the repo root:
     py _test_progress_smoke.py
@@ -54,14 +54,20 @@ def main() -> int:
             {
                 "type": "slide",
                 "title": "Hello",
-                "subtitle": "first slide",
+                "subtitle": "with body",
+                "body": [
+                    "first bullet",
+                    "second bullet",
+                    "1. numbered already",
+                    "- not-a-marker single dash",
+                ],
                 "duration_sec": 1.0,
                 "background_color": "#202040",
             },
             {
                 "type": "slide",
                 "title": "Plain",
-                "subtitle": "second slide",
+                "subtitle": "no body",
                 "duration_sec": 1.0,
                 "background_color": "#404020",
             },
@@ -119,6 +125,15 @@ def main() -> int:
         f"expected {final_path} to exist and be non-empty"
     )
     print(f"[smoke] final.mp4 size: {final_path.stat().st_size} bytes")
+
+    # 5) Preview render of slide 0 only.
+    rc2 = compose_mod.run(tmp_root, slug, only_index=0)
+    assert rc2 == 0, f"compose.run(only_index=0) returned {rc2}"
+    preview = proj / "out" / "preview-000.mp4"
+    assert preview.exists() and preview.stat().st_size > 0, (
+        f"expected {preview} to exist and be non-empty"
+    )
+    print(f"[smoke] preview-000.mp4 size: {preview.stat().st_size} bytes")
 
     # 7) Cleanup on success.
     shutil.rmtree(tmp_root, ignore_errors=True)
