@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "videopilot"
-version = "0.1.0"
+version = "0.1.1"
 description = "Agent-driven video creation toolkit: neural TTS voiceover, highlight cutting, timeline composition, and NLE export."
 readme = "README.md"
 requires-python = ">=3.10"
