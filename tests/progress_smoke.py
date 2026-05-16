@@ -1,7 +1,7 @@
 """Smoke test for lib/ progress callbacks, slide body field, and only_index preview.
 
 Run from the repo root:
-    py _test_progress_smoke.py
+    py tests/progress_smoke.py
 
 This is intentionally not under a test framework -- it exercises the public
 contract changes end-to-end against a real ffmpeg invocation.
@@ -16,7 +16,7 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
+sys.path.insert(0, str(HERE.parent))
 
 from lib import compose as compose_mod  # noqa: E402
 from lib import tts as tts_mod  # noqa: E402

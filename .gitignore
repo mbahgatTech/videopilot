@@ -45,3 +45,6 @@ projects/*/
 # scratch
 scratch/
 tmp/
+
+# Test scratch directories (created mid-run by tests/mcp_e2e.py, cleaned on success)
+tests/_e2e_projects/

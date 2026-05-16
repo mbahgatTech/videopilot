@@ -13,7 +13,7 @@ described in the orchestration brief:
 
 Run from the repo root:
 
-    python _test_mcp_e2e.py
+    python tests/mcp_e2e.py
 """
 
 from __future__ import annotations
@@ -34,8 +34,9 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters, stdio_client
 
 HERE = Path(__file__).resolve().parent
-SERVER = HERE / "videopilot_mcp.py"
-PROJECT_ROOT = HERE / "_test_e2e_projects"
+REPO_ROOT = HERE.parent
+SERVER = REPO_ROOT / "videopilot_mcp.py"
+PROJECT_ROOT = HERE / "_e2e_projects"
 SLUG = "e2e-validation"
 
 # ---------------------------------------------------------------------------
@@ -118,7 +119,7 @@ async def run_validation() -> int:
     server_params = StdioServerParameters(
         command=sys.executable,
         args=[str(SERVER)],
-        cwd=str(HERE),
+        cwd=str(REPO_ROOT),
     )
 
     skip_network_block = False  # set True if tts hits a network failure
@@ -813,7 +814,7 @@ async def run_validation() -> int:
                 # --- 14. transcribe response shape (static check) -----------
                 try:
                     # Import the server module locally and inspect the transcribe handler.
-                    sys.path.insert(0, str(HERE))
+                    sys.path.insert(0, str(REPO_ROOT))
                     import videopilot_mcp as vp_mcp  # noqa: WPS433
 
                     src = inspect.getsource(vp_mcp.transcribe.fn) if hasattr(vp_mcp.transcribe, "fn") else inspect.getsource(vp_mcp.transcribe)
@@ -904,7 +905,7 @@ def _probe_duration(path: Path) -> float | None:
     if not ffprobe:
         # Fallback to lib/ffmpeg_wrap which knows about WinGet paths.
         try:
-            sys.path.insert(0, str(HERE))
+            sys.path.insert(0, str(REPO_ROOT))
             from lib import ffmpeg_wrap
 
             ffmpeg_wrap.ensure_on_path()
