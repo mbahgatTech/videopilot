@@ -225,7 +225,30 @@ Timeline item types:
   and image are set, image wins)
 - `title` (optional): large heading text overlay
 - `subtitle` (optional): smaller text below title
+- `body` (optional, `list[str]`): body lines rendered left-aligned below the
+  subtitle (fontsize 36, `x=200`, starting at `y=h/2+110`, 56px line height).
+  Each list entry is one line. Lines starting with `\d+. ` (numbered),
+  `"• "`, or `"-  "` are passed through verbatim; any other line is
+  auto-prefixed with `"•  "` so plain strings render as bullets.
 - `voiceover` (optional): id from script.json
+
+Example slide with body bullets:
+
+```json
+{
+  "type": "slide",
+  "voiceover": "vo-agenda",
+  "background_color": "#0b132b",
+  "title": "Today's Agenda",
+  "subtitle": "Three things to cover",
+  "body": [
+    "Why the onboarding flow is broken",
+    "What the metrics actually show",
+    "1. Ship the fix this sprint",
+    "- Already-dashed lines pass through"
+  ]
+}
+```
 
 **`gap`** — a fixed silent black pause (useful for breathing room):
 - `duration_sec` (required)
