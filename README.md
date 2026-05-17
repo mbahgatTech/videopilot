@@ -26,6 +26,17 @@ source.mp4  ->  script.json  ->  tts  ->  cut-plan.json  ->  cut  ->  compose-pl
                                                                                                           + EDL / FCPXML / replay script
 ```
 
+## Architecture
+
+![videopilot architecture diagram](assets/architecture.png)
+
+Two clients (an LLM driving the MCP server, or you driving the CLI) talk
+to two entry points (`videopilot-mcp` and `videopilot`). Both entry points
+import the same `lib/` pipeline modules, which read and write per-project
+JSON state files and shell out to ffmpeg, edge-tts, Azure Speech, and
+faster-whisper via `lib/ffmpeg_wrap.py`. Regenerate this image with
+`python assets/make_arch.py`.
+
 ## Highlights
 
 | Capability | Engine |
@@ -44,26 +55,15 @@ source.mp4  ->  script.json  ->  tts  ->  cut-plan.json  ->  cut  ->  compose-pl
 
 ## Install
 
-### From PyPI (recommended)
+VideoPilot is a Python package on PyPI. Pick one of the two paths below —
+install once with `pip` and let your MCP client launch the installed entry
+point, or skip the install entirely and let `uvx` run the latest release in
+an ephemeral environment on demand.
 
-```
-pip install --user videopilot
-```
-
-Two console scripts are installed:
-
-| Script | Purpose |
-|---|---|
-| `videopilot-mcp` | The MCP server (stdio transport). Wire this into your MCP client. |
-| `videopilot` | The manual CLI. Useful for one-off stages and CI. |
-
-Verify the install:
-
-```
-videopilot doctor
-```
-
-You also need **ffmpeg** on `PATH`:
+**Install ffmpeg first.** Both paths need `ffmpeg` on `PATH` *before*
+you point your agent at videopilot — otherwise `doctor` (the first
+tool the agent will call) fails, and most agents will then try to
+install ffmpeg for you, which is rarely what you want:
 
 | OS | Command |
 |---|---|
@@ -73,32 +73,54 @@ You also need **ffmpeg** on `PATH`:
 | Fedora | `sudo dnf install ffmpeg` |
 | Arch | `sudo pacman -S ffmpeg` |
 
-`videopilot doctor` exits 0 when ffmpeg, ffprobe, Python deps, and optional
-Azure keys are all in order; otherwise it prints exactly what's missing.
-The same check is also exposed as the `doctor` MCP tool.
+### Option 1 — `pip install` (recommended)
 
-### From source (development)
+Install the package from PyPI:
 
 ```
-git clone https://github.com/mbahgatTech/videopilot.git
-cd videopilot
-pip install --user -e .
+pip install videopilot
 ```
 
-### Via the Agency plugin
+Two console scripts are placed on `PATH`:
 
-If you use Copilot or Claude inside Microsoft and have access to the
-[Agency Playground](https://github.com/agency-microsoft/playground)
-marketplace, install the `videopilot` plugin and ask:
+| Script | Purpose |
+|---|---|
+| `videopilot-mcp` | The MCP server (stdio transport). Point your MCP client at this. |
+| `videopilot` | The manual CLI. Useful for one-off stages, CI, and the `doctor` check below. |
 
-> set up videopilot
+Verify the install. `videopilot doctor` exits 0 when ffmpeg, ffprobe,
+Python deps, and optional Azure keys are all in order; otherwise it prints
+exactly what's missing:
 
-The plugin's `init` skill runs the same installer logic for you.
+```
+videopilot doctor
+```
 
-## Connect to an MCP client
+Then wire the installed entry point into your MCP client. The verified
+config for the GitHub Copilot CLI (`~/.copilot/mcp-config.json`) is:
 
-`videopilot-mcp` runs the MCP server over stdio. The verified config for the
-GitHub Copilot CLI (`~/.copilot/mcp-config.json`) is:
+```json
+{
+  "mcpServers": {
+    "videopilot": {
+      "type": "stdio",
+      "command": "videopilot-mcp",
+      "args": [],
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+Any MCP-aware client that supports stdio servers can launch
+`videopilot-mcp` the same way — consult your client's docs for the exact
+config-file location and schema.
+
+### Option 2 — `uvx` (no install)
+
+If you'd rather not install `videopilot` globally, point your MCP client
+at `uvx` and it will fetch the latest release from PyPI into an ephemeral
+environment on demand:
 
 ```json
 {
@@ -113,17 +135,37 @@ GitHub Copilot CLI (`~/.copilot/mcp-config.json`) is:
 }
 ```
 
-`uvx` pulls the latest `videopilot` from PyPI into an ephemeral environment
-and runs the `videopilot-mcp` entry point — no global install required. If
-you already have `videopilot` installed globally (`pip install videopilot`)
-you can instead use `"command": "videopilot-mcp"` with `"args": []`.
+This skips the global install, but you won't have the `videopilot` CLI
+handy locally for diagnostics like `videopilot doctor` — the same check
+is also exposed as the `doctor` MCP tool, so your agent can run it for
+you on its very first call.
 
-Any MCP-aware client that supports stdio servers can run `videopilot-mcp`
-the same way — consult your client's docs for the exact config-file
-location and schema.
+### Talk to your agent
 
-After your client restarts, the agent can call any of the 20 `videopilot.*`
-tools below.
+After your MCP client restarts, the agent can call any of the 20
+`videopilot.*` tools listed [below](#mcp-tools). Just describe the video
+you want — the agent picks the tools and the order. Two examples:
+
+> Make a 60-second narrated explainer about videopilot with three title
+> slides and a voiceover tying them together.
+
+> Take the 10-minute raw recording at `~/Recordings/raw.mp4` and turn it
+> into an interesting 60-second highlight reel with a voiceover.
+
+The `schema` MCP tool returns the authoritative JSON schemas for every
+state file inside the running server, so the agent always has the
+contract available. For prose narrative on tool order and call patterns,
+see [`AGENT.md`](https://github.com/mbahgatTech/videopilot/blob/main/AGENT.md)
+on GitHub (it isn't bundled with the installed package — fetch it from
+that URL if your agent wants it).
+
+### From source (development)
+
+```
+git clone https://github.com/mbahgatTech/videopilot.git
+cd videopilot
+pip install -e .
+```
 
 ## MCP tools
 
@@ -257,7 +299,7 @@ Edge TTS is the default and requires no configuration.
 ```
 git clone https://github.com/mbahgatTech/videopilot.git
 cd videopilot
-pip install --user -e ".[dev]"
+pip install -e ".[dev]"
 
 # Build the package
 python -m build
