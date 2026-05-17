@@ -6,10 +6,22 @@ import { Terminal, Package, Zap } from "lucide-react";
 import { cn } from "@/lib/cn";
 import CopyButton from "./copy-button";
 import TerminalBlock from "./terminal-block";
+import JsonBlock from "./json-block";
 
 type TabKey = "pypi" | "uvx";
 
-const PYPI_CMD = "pip install --user videopilot";
+const PYPI_CMD = "pip install videopilot";
+
+const PYPI_MCP_CONFIG = `{
+  "mcpServers": {
+    "videopilot": {
+      "type": "stdio",
+      "command": "videopilot-mcp",
+      "args": [],
+      "tools": ["*"]
+    }
+  }
+}`;
 
 const UVX_CONFIG = `{
   "mcpServers": {
@@ -23,7 +35,7 @@ const UVX_CONFIG = `{
 }`;
 
 const TABS: { key: TabKey; label: string; icon: typeof Package; hint: string }[] = [
-  { key: "pypi", label: "PyPI", icon: Package, hint: "pip install --user" },
+  { key: "pypi", label: "pip", icon: Package, hint: "pip install" },
   { key: "uvx", label: "uvx (MCP config)", icon: Zap, hint: "~/.copilot/mcp-config.json" },
 ];
 
@@ -106,18 +118,40 @@ export default function Install() {
               hidden={tab !== "pypi"}
               className="p-4 sm:p-5"
             >
-              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background/70 px-3 py-3 sm:px-4">
+              <div className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-muted-2">
+                <span className="grid h-4 w-4 place-items-center rounded-full bg-violet/15 text-[9px] text-violet">1</span>
+                Install
+              </div>
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-background/70 px-3 py-3 sm:px-4">
                 <div className="flex min-w-0 flex-1 items-center gap-2 font-mono text-[12px] sm:gap-3 sm:text-sm">
                   <span className="select-none text-violet">$</span>
                   <span className="min-w-0 break-words text-foreground">{PYPI_CMD}</span>
                 </div>
                 <CopyButton value={PYPI_CMD} className="shrink-0" />
               </div>
-              <p className="mt-4 text-xs text-muted">
-                Installs the <code className="font-mono">videopilot</code> CLI
-                and the <code className="font-mono">videopilot-mcp</code> server
-                entry point. You&apos;ll also need <code className="font-mono">ffmpeg</code>{" "}
-                on <code className="font-mono">PATH</code>.
+              <p className="mt-3 text-xs text-muted">
+                Installs the <code className="font-mono text-foreground">videopilot</code> CLI
+                and the <code className="font-mono text-foreground">videopilot-mcp</code> server
+                on your <code className="font-mono">PATH</code>. You&apos;ll also need{" "}
+                <code className="font-mono text-foreground">ffmpeg</code> available.
+              </p>
+
+              <div className="mt-5 flex items-center gap-2 font-mono text-[10px] uppercase tracking-widest text-muted-2">
+                <span className="grid h-4 w-4 place-items-center rounded-full bg-violet/15 text-[9px] text-violet">2</span>
+                Wire up MCP
+              </div>
+              <div className="mt-2 rounded-xl border border-border bg-background/70">
+                <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5 sm:px-4">
+                  <span className="min-w-0 truncate font-mono text-[10.5px] text-muted-2 sm:text-[11px]">
+                    ~/.copilot/mcp-config.json
+                  </span>
+                  <CopyButton value={PYPI_MCP_CONFIG} className="shrink-0" />
+                </div>
+                <JsonBlock value={PYPI_MCP_CONFIG} className="px-3 py-3 sm:px-4" />
+              </div>
+              <p className="mt-3 text-xs text-muted">
+                Restart your MCP client. All 20 VideoPilot tools register over stdio
+                via the <code className="font-mono text-foreground">videopilot-mcp</code> entry point.
               </p>
             </div>
 
@@ -135,9 +169,7 @@ export default function Install() {
                   </span>
                   <CopyButton value={UVX_CONFIG} className="shrink-0" />
                 </div>
-                <pre className="overflow-x-auto whitespace-pre-wrap break-words px-3 py-3 font-mono text-[11.5px] leading-relaxed text-foreground sm:whitespace-pre sm:px-4 sm:text-[12.5px]">
-                  <code>{UVX_CONFIG}</code>
-                </pre>
+                <JsonBlock value={UVX_CONFIG} className="px-3 py-3 sm:px-4" />
               </div>
               <p className="mt-4 text-xs text-muted">
                 <code className="font-mono">uvx</code> fetches{" "}
