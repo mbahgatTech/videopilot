@@ -28,7 +28,7 @@ source.mp4  ->  script.json  ->  tts  ->  cut-plan.json  ->  cut  ->  compose-pl
 
 ## Architecture
 
-![videopilot architecture diagram](assets/architecture.png)
+![videopilot architecture diagram](https://raw.githubusercontent.com/mbahgatTech/videopilot/main/assets/architecture.png)
 
 Two clients (an LLM driving the MCP server, or you driving the CLI) talk
 to two entry points (`videopilot-mcp` and `videopilot`). Both entry points
