@@ -17,6 +17,7 @@ const PYPI_MCP_CONFIG = `{
     "videopilot": {
       "type": "stdio",
       "command": "videopilot-mcp",
+      "args": [],
       "tools": ["*"]
     }
   }

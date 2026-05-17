@@ -115,9 +115,8 @@ GitHub Copilot CLI (`~/.copilot/mcp-config.json`) is:
 
 `uvx` pulls the latest `videopilot` from PyPI into an ephemeral environment
 and runs the `videopilot-mcp` entry point — no global install required. If
-you already have `videopilot` installed globally (`pip install --user
-videopilot`) you can instead use `"command": "videopilot-mcp"` with no
-`args`.
+you already have `videopilot` installed globally (`pip install videopilot`)
+you can instead use `"command": "videopilot-mcp"` with `"args": []`.
 
 Any MCP-aware client that supports stdio servers can run `videopilot-mcp`
 the same way — consult your client's docs for the exact config-file
