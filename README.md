@@ -26,6 +26,17 @@ source.mp4  ->  script.json  ->  tts  ->  cut-plan.json  ->  cut  ->  compose-pl
                                                                                                           + EDL / FCPXML / replay script
 ```
 
+## Architecture
+
+![videopilot architecture diagram](assets/architecture.png)
+
+Two clients (an LLM driving the MCP server, or you driving the CLI) talk
+to two entry points (`videopilot-mcp` and `videopilot`). Both entry points
+import the same `lib/` pipeline modules, which read and write per-project
+JSON state files and shell out to ffmpeg, edge-tts, Azure Speech, and
+faster-whisper via `lib/ffmpeg_wrap.py`. Regenerate this image with
+`python assets/make_arch.py`.
+
 ## Highlights
 
 | Capability | Engine |
@@ -44,26 +55,12 @@ source.mp4  ->  script.json  ->  tts  ->  cut-plan.json  ->  cut  ->  compose-pl
 
 ## Install
 
-### From PyPI (recommended)
+VideoPilot is a Python package on PyPI. Pick one of the two paths below —
+install once with `pip` and let your MCP client launch the installed entry
+point, or skip the install entirely and let `uvx` run the latest release in
+an ephemeral environment on demand.
 
-```
-pip install --user videopilot
-```
-
-Two console scripts are installed:
-
-| Script | Purpose |
-|---|---|
-| `videopilot-mcp` | The MCP server (stdio transport). Wire this into your MCP client. |
-| `videopilot` | The manual CLI. Useful for one-off stages and CI. |
-
-Verify the install:
-
-```
-videopilot doctor
-```
-
-You also need **ffmpeg** on `PATH`:
+Either path needs **ffmpeg** on `PATH`:
 
 | OS | Command |
 |---|---|
@@ -73,32 +70,54 @@ You also need **ffmpeg** on `PATH`:
 | Fedora | `sudo dnf install ffmpeg` |
 | Arch | `sudo pacman -S ffmpeg` |
 
-`videopilot doctor` exits 0 when ffmpeg, ffprobe, Python deps, and optional
-Azure keys are all in order; otherwise it prints exactly what's missing.
-The same check is also exposed as the `doctor` MCP tool.
+### Option 1 — `pip install` (recommended)
 
-### From source (development)
+Install the package from PyPI:
 
 ```
-git clone https://github.com/mbahgatTech/videopilot.git
-cd videopilot
-pip install --user -e .
+pip install videopilot
 ```
 
-### Via the Agency plugin
+Two console scripts are placed on `PATH`:
 
-If you use Copilot or Claude inside Microsoft and have access to the
-[Agency Playground](https://github.com/agency-microsoft/playground)
-marketplace, install the `videopilot` plugin and ask:
+| Script | Purpose |
+|---|---|
+| `videopilot-mcp` | The MCP server (stdio transport). Point your MCP client at this. |
+| `videopilot` | The manual CLI. Useful for one-off stages, CI, and the `doctor` check below. |
 
-> set up videopilot
+Verify the install. `videopilot doctor` exits 0 when ffmpeg, ffprobe,
+Python deps, and optional Azure keys are all in order; otherwise it prints
+exactly what's missing:
 
-The plugin's `init` skill runs the same installer logic for you.
+```
+videopilot doctor
+```
 
-## Connect to an MCP client
+Then wire the installed entry point into your MCP client. The verified
+config for the GitHub Copilot CLI (`~/.copilot/mcp-config.json`) is:
 
-`videopilot-mcp` runs the MCP server over stdio. The verified config for the
-GitHub Copilot CLI (`~/.copilot/mcp-config.json`) is:
+```json
+{
+  "mcpServers": {
+    "videopilot": {
+      "type": "stdio",
+      "command": "videopilot-mcp",
+      "args": [],
+      "tools": ["*"]
+    }
+  }
+}
+```
+
+Any MCP-aware client that supports stdio servers can launch
+`videopilot-mcp` the same way — consult your client's docs for the exact
+config-file location and schema.
+
+### Option 2 — `uvx` (no install)
+
+If you'd rather not install `videopilot` globally, point your MCP client
+at `uvx` and it will fetch the latest release from PyPI into an ephemeral
+environment on demand:
 
 ```json
 {
@@ -113,17 +132,36 @@ GitHub Copilot CLI (`~/.copilot/mcp-config.json`) is:
 }
 ```
 
-`uvx` pulls the latest `videopilot` from PyPI into an ephemeral environment
-and runs the `videopilot-mcp` entry point — no global install required. If
-you already have `videopilot` installed globally (`pip install videopilot`)
-you can instead use `"command": "videopilot-mcp"` with `"args": []`.
+This skips the global install, but you won't have the `videopilot` CLI
+handy locally for diagnostics like `videopilot doctor` — the same check
+is also exposed as the `doctor` MCP tool, so your agent can run it for
+you on its very first call.
 
-Any MCP-aware client that supports stdio servers can run `videopilot-mcp`
-the same way — consult your client's docs for the exact config-file
-location and schema.
+### Talk to your agent
 
-After your client restarts, the agent can call any of the 20 `videopilot.*`
-tools below.
+After your MCP client restarts, the agent can call any of the 20
+`videopilot.*` tools listed [below](#mcp-tools). A good first prompt —
+paste this into your agent and adjust the inputs:
+
+> Use the `videopilot` MCP server to turn `~/Recordings/raw.mp4` into a
+> ~60-second narrated highlight reel. Start with the `doctor` tool to
+> sanity-check the environment, then `init` a project called `demo` with
+> that file as the source. Read `AGENT.md` first so you follow the
+> contract: transcribe the source, draft a short voiceover script with
+> `add_vo_segment`, pick the highlights into a `cut-plan`, then call
+> `tts`, `cut`, and `compose` to render the final MP4 at 1920x1080@30fps.
+
+The agent should read [`AGENT.md`](AGENT.md) before issuing tool calls —
+it documents what each tool reads and writes, the JSON state-file
+schemas, and the recommended call order.
+
+### From source (development)
+
+```
+git clone https://github.com/mbahgatTech/videopilot.git
+cd videopilot
+pip install -e .
+```
 
 ## MCP tools
 
@@ -257,7 +295,7 @@ Edge TTS is the default and requires no configuration.
 ```
 git clone https://github.com/mbahgatTech/videopilot.git
 cd videopilot
-pip install --user -e ".[dev]"
+pip install -e ".[dev]"
 
 # Build the package
 python -m build
