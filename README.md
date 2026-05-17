@@ -60,7 +60,10 @@ install once with `pip` and let your MCP client launch the installed entry
 point, or skip the install entirely and let `uvx` run the latest release in
 an ephemeral environment on demand.
 
-Either path needs **ffmpeg** on `PATH`:
+**Install ffmpeg first.** Both paths need `ffmpeg` on `PATH` *before*
+you point your agent at videopilot — otherwise `doctor` (the first
+tool the agent will call) fails, and most agents will then try to
+install ffmpeg for you, which is rarely what you want:
 
 | OS | Command |
 |---|---|
