@@ -140,20 +140,21 @@ you on its very first call.
 ### Talk to your agent
 
 After your MCP client restarts, the agent can call any of the 20
-`videopilot.*` tools listed [below](#mcp-tools). A good first prompt —
-paste this into your agent and adjust the inputs:
+`videopilot.*` tools listed [below](#mcp-tools). Just describe the video
+you want — the agent picks the tools and the order. Two examples:
 
-> Use the `videopilot` MCP server to turn `~/Recordings/raw.mp4` into a
-> ~60-second narrated highlight reel. Start with the `doctor` tool to
-> sanity-check the environment, then `init` a project called `demo` with
-> that file as the source. Read `AGENT.md` first so you follow the
-> contract: transcribe the source, draft a short voiceover script with
-> `add_vo_segment`, pick the highlights into a `cut-plan`, then call
-> `tts`, `cut`, and `compose` to render the final MP4 at 1920x1080@30fps.
+> Make a 60-second narrated explainer about videopilot with three title
+> slides and a voiceover tying them together.
 
-The agent should read [`AGENT.md`](AGENT.md) before issuing tool calls —
-it documents what each tool reads and writes, the JSON state-file
-schemas, and the recommended call order.
+> Take the 10-minute raw recording at `~/Recordings/raw.mp4` and turn it
+> into an interesting 60-second highlight reel with a voiceover.
+
+The `schema` MCP tool returns the authoritative JSON schemas for every
+state file inside the running server, so the agent always has the
+contract available. For prose narrative on tool order and call patterns,
+see [`AGENT.md`](https://github.com/mbahgatTech/videopilot/blob/main/AGENT.md)
+on GitHub (it isn't bundled with the installed package — fetch it from
+that URL if your agent wants it).
 
 ### From source (development)
 
