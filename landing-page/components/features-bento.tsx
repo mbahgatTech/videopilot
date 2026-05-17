@@ -19,7 +19,7 @@ const FEATURES: (FeatureCardProps & { area: string })[] = [
     title: "Agent-driven by design",
     description:
       "Wired for MCP. Any agent — GitHub Copilot CLI, Claude Desktop, Cursor — drives the whole pipeline through 20 typed tool calls.",
-    code: '"command": "uvx",\n"args": ["--from", "videopilot",\n         "videopilot-mcp"]',
+    code: '{\n  "command": "uvx",\n  "args": ["--from", "videopilot",\n           "videopilot-mcp"]\n}',
     area: "md:col-span-2 md:row-span-2",
   },
   {
