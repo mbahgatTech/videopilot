@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { Terminal, Package, Zap } from "lucide-react";
+import { Sparkles, Package, Zap } from "lucide-react";
 import { cn } from "@/lib/cn";
 import CopyButton from "./copy-button";
 import TerminalBlock from "./terminal-block";
@@ -183,27 +183,35 @@ export default function Install() {
 
         <div className="lg:col-span-2">
           <div className="mb-3 inline-flex items-center gap-2 font-mono text-xs uppercase tracking-widest text-muted">
-            <Terminal className="h-3.5 w-3.5" aria-hidden="true" />
-            Verify
+            <Sparkles className="h-3.5 w-3.5 text-violet" aria-hidden="true" />
+            Talk to an agent
           </div>
           <TerminalBlock
-            title="videopilot doctor"
+            title="agent · videopilot"
+            prompt="you →"
             lines={[
-              { kind: "in", text: "videopilot doctor" },
-              { kind: "out", text: "Checking environment..." },
-              { kind: "ok", text: "[OK]    ffmpeg     7.1" },
-              { kind: "ok", text: "[OK]    ffprobe    7.1" },
-              { kind: "ok", text: "[OK]    edge-tts   ready" },
-              { kind: "ok", text: "[OK]    whisper    base" },
-              { kind: "warn", text: "[skip]  azure      no key (optional)" },
+              {
+                kind: "in",
+                text:
+                  "Turn ~/Recordings/raw.mp4 into a cinematic 60s reel — pick the best moments, write a voiceover, add slides between sections.",
+              },
               { kind: "out", text: "" },
-              { kind: "ok", text: "All required checks passed." },
+              { kind: "warn", text: "[⋯] planning tool sequence…" },
+              { kind: "ok", text: "[✓] doctor()              env ok" },
+              { kind: "ok", text: "[✓] init('cinema-reel')   project ready" },
+              { kind: "ok", text: "[✓] transcribe()          12.4k words" },
+              { kind: "ok", text: "[✓] add_vo_segment × 5    narration drafted" },
+              { kind: "ok", text: "[✓] add_slide × 3         title cards" },
+              { kind: "ok", text: "[✓] tts()                 5 mp3s" },
+              { kind: "ok", text: "[✓] cut() · compose()     timeline rendered" },
+              { kind: "out", text: "" },
+              { kind: "ok", text: "out/final.mp4 — 62s · 1920×1080 ✨" },
             ]}
           />
           <p className="mt-4 text-xs text-muted">
-            <code className="font-mono">videopilot doctor</code>{" "}exits 0 when
-            every required dep is in place, and prints exactly what&apos;s
-            missing otherwise.
+            Once your MCP client picks up the new server, just describe the
+            video you want in plain English. The agent picks the tools and
+            the order — you watch it happen.
           </p>
         </div>
       </div>
