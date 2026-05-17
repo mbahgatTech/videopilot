@@ -98,10 +98,10 @@ export default function Hero() {
               PyPI
             </span>
             <code className="min-w-0 break-words font-mono text-[11px] text-foreground sm:text-xs md:text-sm">
-              pip install --user videopilot
+              pip install videopilot
             </code>
             <CopyButton
-              value="pip install --user videopilot"
+              value="pip install videopilot"
               label="Copy"
               className="ml-1 shrink-0"
             />
