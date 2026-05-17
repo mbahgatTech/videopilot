@@ -1,0 +1,749 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>videopilot — videos as code</title>
+  <meta name="description" content="videopilot is an MCP server and CLI that turns JSON + voiceover into finished MP4s. Powered by FFmpeg, edge-tts, Azure Speech, and faster-whisper." />
+
+  <link rel="icon" href="assets/favicon.png" />
+
+  <meta property="og:type" content="website" />
+  <meta property="og:url" content="https://mbahgattech.github.io/videopilot/" />
+  <meta property="og:title" content="videopilot — videos as code" />
+  <meta property="og:description" content="An MCP server (and CLI) that turns JSON + voiceover into finished MP4s. Powered by FFmpeg, edge-tts, Azure Speech, and faster-whisper." />
+  <meta property="og:image" content="assets/og-cover.png" />
+
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:url" content="https://mbahgattech.github.io/videopilot/" />
+  <meta name="twitter:title" content="videopilot — videos as code" />
+  <meta name="twitter:description" content="An MCP server (and CLI) that turns JSON + voiceover into finished MP4s. Powered by FFmpeg, edge-tts, Azure Speech, and faster-whisper." />
+  <meta name="twitter:image" content="assets/og-cover.png" />
+
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+
+    :root {
+      --bg-1: #0a122a;
+      --bg-2: #163250;
+      --gold: #ffc400;
+      --gold-dim: #d9a500;
+      --white: #ffffff;
+      --muted: #c0d4e8;
+      --dim: #7e94b0;
+      --card-border: rgba(255, 255, 255, 0.10);
+      --card-bg: rgba(255, 255, 255, 0.03);
+      --shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+    }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+      color: var(--white);
+      line-height: 1.6;
+      background: linear-gradient(160deg, var(--bg-1) 0%, var(--bg-2) 100%);
+      background-attachment: fixed;
+      min-height: 100vh;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    a { color: var(--gold); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    section { scroll-margin-top: 80px; }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 0 24px;
+    }
+
+    /* NAV */
+    nav.topnav {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      background: rgba(10, 18, 42, 0.65);
+      border-bottom: 1px solid var(--card-border);
+    }
+    nav.topnav .inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 16px 24px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 700;
+      letter-spacing: 0.18em;
+      font-size: 14px;
+      color: var(--white);
+    }
+    .brand .dot {
+      width: 10px;
+      height: 10px;
+      background: var(--gold);
+      border-radius: 50%;
+      box-shadow: 0 0 16px rgba(255, 196, 0, 0.7);
+    }
+    .navlinks { display: flex; gap: 28px; align-items: center; }
+    .navlinks a {
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 500;
+      letter-spacing: 0.02em;
+    }
+    .navlinks a:hover { color: var(--white); text-decoration: none; }
+    .navlinks a.gh {
+      color: var(--white);
+      border: 1px solid var(--card-border);
+      padding: 6px 14px;
+      border-radius: 999px;
+    }
+
+    /* HERO */
+    .hero {
+      position: relative;
+      padding: 80px 0 60px;
+      overflow: hidden;
+    }
+    .hero::before, .hero::after {
+      content: "";
+      position: absolute;
+      width: 600px;
+      height: 600px;
+      border-radius: 50%;
+      filter: blur(120px);
+      opacity: 0.35;
+      pointer-events: none;
+      z-index: 0;
+    }
+    .hero::before {
+      background: #22d3ee;
+      top: -200px;
+      right: -150px;
+    }
+    .hero::after {
+      background: #a78bfa;
+      bottom: -200px;
+      left: -150px;
+    }
+    .hero .container { position: relative; z-index: 1; }
+    .eyebrow {
+      color: var(--gold);
+      letter-spacing: 0.24em;
+      font-size: 13px;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-bottom: 20px;
+    }
+    h1 {
+      font-size: clamp(2.5rem, 6vw, 4.5rem);
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      line-height: 1.05;
+      margin: 0 0 24px;
+    }
+    h1 .accent {
+      display: inline-block;
+      position: relative;
+    }
+    h1 .accent::after {
+      content: "";
+      position: absolute;
+      left: 0; right: 0;
+      bottom: 6px;
+      height: 8px;
+      background: var(--gold);
+      opacity: 0.85;
+      z-index: -1;
+      border-radius: 2px;
+    }
+    .subhead {
+      color: var(--muted);
+      font-size: clamp(1.05rem, 1.6vw, 1.25rem);
+      max-width: 760px;
+      margin: 0 0 36px;
+    }
+
+    .cta-row {
+      display: flex;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 48px;
+    }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 14px 26px;
+      font-size: 15px;
+      font-weight: 600;
+      border-radius: 999px;
+      border: 1px solid transparent;
+      cursor: pointer;
+      transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease, color 0.15s ease;
+      text-decoration: none;
+    }
+    .btn:hover { transform: translateY(-1px); text-decoration: none; }
+    .btn-primary {
+      background: var(--gold);
+      color: #1a1303;
+      box-shadow: 0 10px 30px rgba(255, 196, 0, 0.28);
+    }
+    .btn-primary:hover { background: #ffd23b; box-shadow: 0 14px 34px rgba(255, 196, 0, 0.38); }
+    .btn-ghost {
+      background: transparent;
+      color: var(--white);
+      border-color: var(--card-border);
+    }
+    .btn-ghost:hover { background: rgba(255,255,255,0.05); }
+
+    .video-wrap {
+      max-width: 1100px;
+      margin: 0 auto;
+      border-radius: 18px;
+      overflow: hidden;
+      border: 1px solid var(--card-border);
+      box-shadow: 0 30px 80px rgba(255, 196, 0, 0.12), 0 10px 30px rgba(0,0,0,0.5);
+      background: #000;
+    }
+    .video-wrap video {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    /* SECTIONS */
+    .section {
+      padding: 80px 0;
+    }
+    .section h2 {
+      font-size: clamp(1.8rem, 3vw, 2.5rem);
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      margin: 0 0 12px;
+    }
+    .section .lead {
+      color: var(--muted);
+      font-size: 1.1rem;
+      margin: 0 0 40px;
+      max-width: 700px;
+    }
+
+    /* VALUE PROPS */
+    .props {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 24px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      padding: 28px;
+      box-shadow: var(--shadow);
+    }
+    .card h3 {
+      margin: 0 0 12px;
+      font-size: 1.2rem;
+      color: var(--white);
+    }
+    .card h3 .pin {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      background: var(--gold);
+      border-radius: 50%;
+      margin-right: 10px;
+      vertical-align: middle;
+    }
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 0.97rem;
+    }
+
+    /* ARCHITECTURE */
+    .arch-img {
+      display: block;
+      max-width: 100%;
+      height: auto;
+      border-radius: 18px;
+      border: 1px solid var(--card-border);
+      box-shadow: var(--shadow);
+      background: var(--card-bg);
+    }
+
+    /* INSTALL / TABS */
+    .install-card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 18px;
+      padding: 8px;
+      box-shadow: var(--shadow);
+    }
+    .tabs {
+      display: flex;
+      gap: 4px;
+      padding: 8px;
+      border-bottom: 1px solid var(--card-border);
+      flex-wrap: wrap;
+    }
+    .tab {
+      background: transparent;
+      color: var(--muted);
+      border: 1px solid transparent;
+      padding: 10px 18px;
+      font-size: 14px;
+      font-weight: 600;
+      border-radius: 12px;
+      cursor: pointer;
+      font-family: inherit;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+    }
+    .tab:hover { color: var(--white); }
+    .tab.active {
+      background: rgba(255, 196, 0, 0.10);
+      color: var(--gold);
+      border-color: rgba(255, 196, 0, 0.35);
+    }
+    .tab-panel {
+      padding: 28px;
+      display: none;
+    }
+    .tab-panel.active { display: block; }
+    .tab-panel .step-label {
+      color: var(--gold);
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      margin: 0 0 8px;
+    }
+    .tab-panel p { color: var(--muted); }
+    .tab-panel .small {
+      color: var(--dim);
+      font-size: 0.88rem;
+      margin: 10px 0 24px;
+    }
+    .tab-panel blockquote {
+      border-left: 3px solid var(--gold);
+      padding: 8px 16px;
+      margin: 16px 0;
+      color: var(--white);
+      background: rgba(255, 196, 0, 0.06);
+      border-radius: 8px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+
+    /* CODE BLOCKS */
+    pre {
+      background: #050a18;
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 18px 20px;
+      margin: 10px 0 16px;
+      overflow-x: auto;
+      font-size: 0.92rem;
+      line-height: 1.55;
+    }
+    pre code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Courier New", monospace;
+      color: var(--white);
+      display: block;
+      white-space: pre;
+    }
+    pre code.lang-bash { color: #e6edf7; }
+    pre code.lang-bash .bash-line {
+      display: block;
+    }
+    pre code.lang-bash .bash-line::before {
+      content: "$ ";
+      color: var(--gold);
+      user-select: none;
+    }
+
+    /* JSON HIGHLIGHTER COLORS */
+    .json-key    { color: #ffc400; }
+    .json-string { color: #7ad7e8; }
+    .json-num    { color: #ff9b6a; }
+    .json-bool   { color: #c8a8ff; }
+    .json-null   { color: #7e94b0; }
+    .json-punc   { color: #7e94b0; }
+
+    /* TOOLS GRID */
+    .tools {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 16px;
+    }
+    .tool {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 16px 18px;
+      transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    }
+    .tool:hover {
+      transform: translateY(-2px);
+      border-color: rgba(255, 196, 0, 0.35);
+      background: rgba(255, 196, 0, 0.04);
+    }
+    .tool .name {
+      display: inline-block;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.92rem;
+      color: var(--gold);
+      background: rgba(255, 196, 0, 0.08);
+      border: 1px solid rgba(255, 196, 0, 0.25);
+      padding: 3px 10px;
+      border-radius: 999px;
+      margin-bottom: 10px;
+    }
+    .tool .desc {
+      color: var(--muted);
+      font-size: 0.9rem;
+      line-height: 1.45;
+    }
+
+    /* QUICK START */
+    .qs-list {
+      list-style: none;
+      counter-reset: qsstep;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 14px;
+    }
+    .qs-list li {
+      counter-increment: qsstep;
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 18px 20px 18px 70px;
+      position: relative;
+      color: var(--muted);
+    }
+    .qs-list li::before {
+      content: counter(qsstep);
+      position: absolute;
+      left: 18px;
+      top: 16px;
+      width: 36px;
+      height: 36px;
+      border-radius: 50%;
+      background: rgba(255, 196, 0, 0.12);
+      border: 1px solid rgba(255, 196, 0, 0.35);
+      color: var(--gold);
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+    }
+    .qs-list li .title {
+      color: var(--white);
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+    code.inline {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid var(--card-border);
+      color: var(--gold);
+      padding: 2px 8px;
+      border-radius: 6px;
+      font-size: 0.88em;
+      white-space: nowrap;
+    }
+
+    /* FOOTER */
+    footer {
+      border-top: 1px solid var(--card-border);
+      padding: 32px 0;
+      color: var(--dim);
+      font-size: 0.9rem;
+      text-align: center;
+    }
+    footer a { color: var(--muted); }
+
+    /* RESPONSIVE */
+    @media (max-width: 980px) {
+      .props { grid-template-columns: 1fr; }
+      .tools { grid-template-columns: repeat(2, 1fr); }
+    }
+    @media (max-width: 720px) {
+      .navlinks { display: none; }
+      .section { padding: 60px 0; }
+      .hero { padding: 60px 0 40px; }
+      .tools { grid-template-columns: 1fr; }
+      .tab-panel { padding: 20px; }
+    }
+  </style>
+</head>
+<body>
+
+  <nav class="topnav">
+    <div class="inner">
+      <div class="brand">
+        <span class="dot" aria-hidden="true"></span>
+        <span>VIDEOPILOT</span>
+      </div>
+      <div class="navlinks">
+        <a href="#architecture">Architecture</a>
+        <a href="#install">Install</a>
+        <a href="#tools">Tools</a>
+        <a href="#quickstart">Quick Start</a>
+        <a class="gh" href="https://github.com/mbahgatTech/videopilot" target="_blank" rel="noopener">GitHub</a>
+      </div>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <div class="container">
+      <div class="eyebrow">Agent-Driven Video Toolkit</div>
+      <h1>Videos as <span class="accent">code.</span></h1>
+      <p class="subhead">
+        An MCP server (and CLI) that turns JSON + voiceover into finished MP4s.
+        Powered by FFmpeg, edge-tts, Azure Speech, and faster-whisper.
+      </p>
+      <div class="cta-row">
+        <a class="btn btn-primary" href="#install">Install from PyPI →</a>
+        <a class="btn btn-ghost" href="https://github.com/mbahgatTech/videopilot" target="_blank" rel="noopener">View on GitHub</a>
+      </div>
+      <div class="video-wrap">
+        <video controls poster="assets/showcase-poster.jpg" preload="metadata" playsinline>
+          <source src="assets/showcase.mp4" type="video/mp4" />
+          Your browser does not support the video tag.
+        </video>
+      </div>
+    </div>
+  </header>
+
+  <section class="section">
+    <div class="container">
+      <div class="props">
+        <div class="card">
+          <h3><span class="pin"></span>Agent-native</h3>
+          <p>20 MCP tools, schema introspection, and idempotency probes so agents can plan, validate, and resume without flying blind.</p>
+        </div>
+        <div class="card">
+          <h3><span class="pin"></span>FFmpeg under the hood</h3>
+          <p>Silence trim, Ken Burns motion, audio ducking, and music underlay — all driven from declarative JSON.</p>
+        </div>
+        <div class="card">
+          <h3><span class="pin"></span>JSON state, diffable</h3>
+          <p>Version-control your videos like code. Export EDL or FCPXML straight into Premiere, Resolve, and Final Cut.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="architecture">
+    <div class="container">
+      <h2>How it&rsquo;s wired</h2>
+      <p class="lead">Two clients, two entry points, one shared <code class="inline">lib/</code> pipeline.</p>
+      <img src="assets/architecture.png" alt="videopilot architecture diagram showing CLI and MCP entry points sharing a common lib/ pipeline" class="arch-img" />
+    </div>
+  </section>
+
+  <section class="section" id="install">
+    <div class="container">
+      <h2>Install</h2>
+      <p class="lead">Three ways to get videopilot on your machine.</p>
+
+      <div class="install-card">
+        <div class="tabs" role="tablist">
+          <button class="tab active" data-tab="pypi" role="tab" aria-selected="true">PyPI</button>
+          <button class="tab" data-tab="source" role="tab" aria-selected="false">From source</button>
+          <button class="tab" data-tab="agency" role="tab" aria-selected="false">Agency plugin</button>
+        </div>
+
+        <div class="tab-panel active" data-tab="pypi" role="tabpanel">
+          <p class="step-label">Step 1 — Install the package</p>
+<pre><code class="lang-bash"><span class="bash-line">pip install videopilot</span></code></pre>
+          <p class="small">FFmpeg must also be on PATH. See <code class="inline">videopilot doctor</code> to verify.</p>
+
+          <p class="step-label">Step 2 — Wire it into your agent</p>
+          <p>Then wire it into your MCP client (e.g. <code class="inline">~/.copilot/mcp-config.json</code>):</p>
+<pre><code class="lang-json">{
+  "mcpServers": {
+    "videopilot": {
+      "type": "stdio",
+      "command": "videopilot-mcp",
+      "tools": ["*"]
+    }
+  }
+}</code></pre>
+          <p class="small">After your client restarts, the agent can call all 20 <code class="inline">videopilot.*</code> tools.</p>
+        </div>
+
+        <div class="tab-panel" data-tab="source" role="tabpanel">
+          <p class="step-label">Clone and install editable</p>
+<pre><code class="lang-bash"><span class="bash-line">git clone https://github.com/mbahgatTech/videopilot.git</span><span class="bash-line">cd videopilot</span><span class="bash-line">pip install -e .</span></code></pre>
+          <p class="small">Useful if you want to hack on the pipeline or contribute back.</p>
+        </div>
+
+        <div class="tab-panel" data-tab="agency" role="tabpanel">
+          <p class="step-label">Inside Microsoft?</p>
+          <p>Install the <code class="inline">videopilot</code> plugin from the Agency Playground marketplace, then ask:</p>
+          <blockquote>&gt; set up videopilot</blockquote>
+          <p class="small">The plugin handles install, MCP wiring, and a smoke test in one shot.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="tools">
+    <div class="container">
+      <h2>20 tools, one server.</h2>
+      <p class="lead">Every step of the pipeline is exposed as an MCP tool an agent can call, schema-introspect, and idempotency-probe.</p>
+      <div class="tools">
+        <div class="tool"><div class="name">doctor</div><div class="desc">Verify ffmpeg, edge-tts, and whisper are on PATH.</div></div>
+        <div class="tool"><div class="name">voices</div><div class="desc">List available neural TTS voices.</div></div>
+        <div class="tool"><div class="name">list_projects</div><div class="desc">Enumerate projects under <code class="inline">projects/</code>.</div></div>
+        <div class="tool"><div class="name">project_status</div><div class="desc">Pipeline status for one project: state files, intermediates, final.</div></div>
+        <div class="tool"><div class="name">init</div><div class="desc">Create a new project scaffold.</div></div>
+        <div class="tool"><div class="name">import_source</div><div class="desc">Add another source video to an existing project.</div></div>
+        <div class="tool"><div class="name">read_state</div><div class="desc">Read one of the per-project JSON state files.</div></div>
+        <div class="tool"><div class="name">write_state</div><div class="desc">Write script / cut-plan / compose-plan JSON.</div></div>
+        <div class="tool"><div class="name">tts</div><div class="desc">Synthesise voiceover MP3s from <code class="inline">script.json</code>.</div></div>
+        <div class="tool"><div class="name">transcribe</div><div class="desc">Word-level transcript JSON + SRT via faster-whisper.</div></div>
+        <div class="tool"><div class="name">silence</div><div class="desc">Run silencedetect and emit a cut-plan candidate.</div></div>
+        <div class="tool"><div class="name">cut</div><div class="desc">Cut clips per <code class="inline">cut-plan.json</code>.</div></div>
+        <div class="tool"><div class="name">compose</div><div class="desc">Render final video per <code class="inline">compose-plan.json</code>.</div></div>
+        <div class="tool"><div class="name">export</div><div class="desc">Emit EDL / FCPXML / replay script for the timeline.</div></div>
+        <div class="tool"><div class="name">schema</div><div class="desc">JSON schemas for every state file the engine reads.</div></div>
+        <div class="tool"><div class="name">add_vo_segment</div><div class="desc">Append a voiceover segment to <code class="inline">script.json</code>.</div></div>
+        <div class="tool"><div class="name">add_slide</div><div class="desc">Append a slide to <code class="inline">compose-plan.json</code>.</div></div>
+        <div class="tool"><div class="name">set_compose_output</div><div class="desc">Patch the output block (codec, fps, resolution&hellip;).</div></div>
+        <div class="tool"><div class="name">preview_slide</div><div class="desc">Render one timeline item to <code class="inline">out/preview-NNN.mp4</code>.</div></div>
+        <div class="tool"><div class="name">is_up_to_date</div><div class="desc">Check whether downstream artifacts are still consistent.</div></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="section" id="quickstart">
+    <div class="container">
+      <h2>Quick Start</h2>
+      <p class="lead">A nine-step manual run, mirroring the README — every step is also an MCP tool an agent can call autonomously.</p>
+      <ol class="qs-list">
+        <li>
+          <div class="title">Verify your environment</div>
+          Run <code class="inline">videopilot doctor</code> to confirm ffmpeg, edge-tts, and whisper are reachable.
+        </li>
+        <li>
+          <div class="title">Create a project</div>
+          <code class="inline">videopilot init my-clip</code> scaffolds <code class="inline">projects/my-clip/</code> with empty state files.
+        </li>
+        <li>
+          <div class="title">Import a source video (optional)</div>
+          <code class="inline">videopilot import-source my-clip path/to/raw.mp4</code>.
+        </li>
+        <li>
+          <div class="title">Author the voiceover script</div>
+          Edit <code class="inline">script.json</code> directly or call <code class="inline">add_vo_segment</code> from your agent.
+        </li>
+        <li>
+          <div class="title">Synthesise voiceovers</div>
+          <code class="inline">videopilot tts my-clip</code> generates one MP3 per script segment.
+        </li>
+        <li>
+          <div class="title">Plan your cuts</div>
+          Run <code class="inline">videopilot silence my-clip raw1</code> to seed a <code class="inline">cut-plan.json</code>, then refine.
+        </li>
+        <li>
+          <div class="title">Cut the clips</div>
+          <code class="inline">videopilot cut my-clip</code> writes trimmed clips into <code class="inline">clips/</code>.
+        </li>
+        <li>
+          <div class="title">Build the timeline</div>
+          Author <code class="inline">compose-plan.json</code> (or call <code class="inline">add_slide</code>) and preview with <code class="inline">videopilot preview-slide my-clip 0</code>.
+        </li>
+        <li>
+          <div class="title">Render the final MP4</div>
+          <code class="inline">videopilot compose my-clip</code>. Optional: <code class="inline">videopilot export my-clip --fcpxml</code> to hand off to an NLE.
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <footer>
+    <div class="container">
+      MIT licensed &middot; Built with &hearts; by
+      <a href="https://github.com/mbahgatTech" target="_blank" rel="noopener">mbahgatTech</a>
+      &middot;
+      <a href="https://github.com/mbahgatTech/videopilot" target="_blank" rel="noopener">GitHub</a>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      // ---- Tabs ----
+      var tabs = document.querySelectorAll('.tab');
+      var panels = document.querySelectorAll('.tab-panel');
+      tabs.forEach(function (tab) {
+        tab.addEventListener('click', function () {
+          var key = tab.getAttribute('data-tab');
+          tabs.forEach(function (t) {
+            var active = t.getAttribute('data-tab') === key;
+            t.classList.toggle('active', active);
+            t.setAttribute('aria-selected', active ? 'true' : 'false');
+          });
+          panels.forEach(function (p) {
+            p.classList.toggle('active', p.getAttribute('data-tab') === key);
+          });
+        });
+      });
+
+      // ---- JSON syntax highlighter (vanilla) ----
+      function escapeHtml(s) {
+        return s.replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+      }
+
+      var JSON_TOKEN_RE = /("(?:[^"\\]|\\.)*")\s*:|("(?:[^"\\]|\\.)*")|\b(true|false|null)\b|\b(-?\d+(?:\.\d+)?)\b|([{}\[\],:])/g;
+
+      function highlightJson(text) {
+        var escaped = escapeHtml(text);
+        return escaped.replace(JSON_TOKEN_RE, function (match, key, str, boolnull, num, punc) {
+          if (key !== undefined) {
+            return '<span class="json-key">' + key + '</span><span class="json-punc">:</span>';
+          }
+          if (str !== undefined) {
+            return '<span class="json-string">' + str + '</span>';
+          }
+          if (boolnull !== undefined) {
+            if (boolnull === 'null') {
+              return '<span class="json-null">' + boolnull + '</span>';
+            }
+            return '<span class="json-bool">' + boolnull + '</span>';
+          }
+          if (num !== undefined) {
+            return '<span class="json-num">' + num + '</span>';
+          }
+          if (punc !== undefined) {
+            return '<span class="json-punc">' + punc + '</span>';
+          }
+          return match;
+        });
+      }
+
+      document.querySelectorAll('pre > code.lang-json').forEach(function (codeEl) {
+        codeEl.innerHTML = highlightJson(codeEl.textContent);
+      });
+    })();
+  </script>
+</body>
+</html>
