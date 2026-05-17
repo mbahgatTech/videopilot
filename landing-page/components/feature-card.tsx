@@ -73,7 +73,7 @@ export default function FeatureCard({
         </h3>
         <p className="mt-2 text-sm leading-relaxed text-muted">{description}</p>
         {code && (
-          <pre className="mt-5 overflow-x-auto rounded-lg border border-border bg-background/70 p-3 font-mono text-[12px] leading-relaxed text-muted">
+          <pre className="mt-5 overflow-x-auto whitespace-pre-wrap break-words rounded-lg border border-border bg-background/70 p-3 font-mono text-[11px] leading-relaxed text-muted sm:whitespace-pre sm:text-[12px]">
             <code>{code}</code>
           </pre>
         )}

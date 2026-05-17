@@ -33,10 +33,10 @@ export default function TerminalBlock({
         <span className="h-2.5 w-2.5 rounded-full bg-[#28c840]" aria-hidden="true" />
         <span className="ml-2 font-mono text-[11px] text-muted-2">{title}</span>
       </div>
-      <pre className="overflow-x-auto px-5 py-4 font-mono text-[12.5px] leading-relaxed">
+      <pre className="overflow-x-auto whitespace-pre-wrap break-words px-4 py-4 font-mono text-[11.5px] leading-relaxed sm:whitespace-pre sm:px-5 sm:text-[12.5px]">
         <code>
           {lines.map((l, i) => (
-            <div key={i} className={cn("whitespace-pre", KIND_CLASS[l.kind])}>
+            <div key={i} className={cn("break-words sm:whitespace-pre", KIND_CLASS[l.kind])}>
               {l.kind === "in" ? (
                 <>
                   <span className="select-none text-violet">{prompt} </span>

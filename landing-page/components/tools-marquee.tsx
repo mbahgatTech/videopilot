@@ -38,7 +38,7 @@ export default function ToolsMarquee() {
           {doubled.map((t, i) => (
             <span
               key={`${t}-${i}`}
-              className="inline-flex shrink-0 items-center gap-2 rounded-full border border-border bg-surface/70 px-4 py-2 font-mono text-sm text-foreground"
+              className="inline-flex shrink-0 items-center gap-2 rounded-full border border-border bg-surface/70 px-3 py-1.5 font-mono text-xs text-foreground sm:px-4 sm:py-2 sm:text-sm"
             >
               <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-violet" />
               {t}
