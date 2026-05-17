@@ -34,7 +34,7 @@ const UVX_CONFIG = `{
 }`;
 
 const TABS: { key: TabKey; label: string; icon: typeof Package; hint: string }[] = [
-  { key: "pypi", label: "PyPI", icon: Package, hint: "pip install" },
+  { key: "pypi", label: "pip", icon: Package, hint: "pip install" },
   { key: "uvx", label: "uvx (MCP config)", icon: Zap, hint: "~/.copilot/mcp-config.json" },
 ];
 
